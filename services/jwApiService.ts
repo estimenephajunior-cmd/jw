@@ -176,19 +176,58 @@ export async function getWatchtowerIssue(
 /**
  * Fetch full publication text content by document ID.
  *
- * URL pattern:
- * https://b.jw-cdn.org/apis/pub-media/v1/get-publication
- *   ?docid={docId}&langwritten={langCode}&txtCMS=1
+ * Primary: b.jw-cdn.org pub-media v1 (JSON with items[].content HTML).
+ * Fallback: WOL public HTML page for the article — wrapped to match the
+ *           { items: [{ content, title }] } shape so callers don't change.
  */
 export async function getPublicationContent(
   docId: string,
-  langCode: string
+  langCode: string,
+  wolSymbol: string = 'en',
+  wolRegion: string = 'r1',
+  wolLang: string = 'lp-e',
 ): Promise<unknown> {
   const url = (
     `${BASE_CDN}/pub-media/v1/get-publication` +
     `?docid=${docId}&langwritten=${langCode}&txtCMS=1`
   );
-  return jwFetch(url);
+
+  // Try primary CDN endpoint
+  try {
+    const data = await jwFetch<any>(url);
+    const items = Array.isArray(data) ? data : data?.items;
+    const first = Array.isArray(items) ? items[0] : null;
+    if (first?.content) return data;
+  } catch {
+    // fall through to WOL fallback
+  }
+
+  // Fallback: scrape the actual WOL article HTML
+  try {
+    const wolUrl = `${BASE_WOL}/${wolSymbol}/wol/d/${wolRegion}/${wolLang}/${docId}`;
+    const html = await jwFetch<string>(wolUrl, { headers: { Accept: 'text/html' } });
+    if (typeof html === 'string' && html.length > 0) {
+      // Extract main article container
+      const articleMatch =
+        /<article[^>]*class="[^"]*(?:docClass|article)[^"]*"[^>]*>([\s\S]*?)<\/article>/i.exec(html)
+        ?? /<div[^>]*id="article"[^>]*>([\s\S]*?)<\/div>\s*<\/article>/i.exec(html)
+        ?? /<div[^>]*class="[^"]*article[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/main>/i.exec(html);
+      const content = articleMatch ? articleMatch[1] : html;
+
+      const titleMatch =
+        /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html)
+        ?? /<title>([^<]+)<\/title>/i.exec(html);
+      const title = titleMatch
+        ? titleMatch[1].replace(/<[^>]+>/g, '').trim()
+        : 'Article';
+
+      return { items: [{ content, title }] };
+    }
+  } catch {
+    // ignore
+  }
+
+  return { items: [] };
 }
 
 // -----------------------------------------------------------

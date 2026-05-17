@@ -97,13 +97,13 @@ function parseMeetingParts(html: string): MeetingPart[] {
   let section: MeetingPart['section'] = 'other';
   let idx = 0;
 
-  // Section detection patterns
+  // Section detection patterns (multi-lingual: EN + FR + HT)
   const sectionMap: [RegExp, MeetingPart['section']][] = [
-    [/treasures from god/i, 'treasures'],
-    [/apply yourself/i, 'ministry'],
-    [/living as christians/i, 'living'],
-    [/opening song|opening prayer/i, 'opening'],
-    [/closing song|closing prayer/i, 'closing'],
+    [/treasures from god|trésors de la parole|trezò ki nan pawòl/i, 'treasures'],
+    [/apply yourself|qualifions-nous|byen prepare w|apply yourself to the field/i, 'ministry'],
+    [/living as christians|vivons en chrétiens|lavi nou antankè kretyen|lavi nou antanke kretyen/i, 'living'],
+    [/opening song|opening prayer|cantique|kantik.*priyè/i, 'opening'],
+    [/closing song|closing prayer|cantique de conclusion|kantik final/i, 'closing'],
   ];
 
   const iconMap: Record<MeetingPart['section'], string> = {
@@ -112,52 +112,93 @@ function parseMeetingParts(html: string): MeetingPart[] {
     living: '❤️',
     opening: '🎵',
     closing: '🙏',
-    other: '📖',
+    other: '📌',
   };
 
-  // Match headings
-  const headingRe = /<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi;
+  // ── 1. Walk h2 + h3 headings in source order ────────────────
+  // h2 marks a section; h3 = a meeting part. We pair them.
+  const headingRe = /<(h2|h3)([^>]*)>([\s\S]*?)<\/\1>/gi;
   let match;
+  const seenTitles = new Set<string>();
   while ((match = headingRe.exec(html)) !== null) {
-    const text = stripTags(match[1]);
-    if (!text || text.length < 4) continue;
+    const tag = match[1].toLowerCase();
+    const text = stripTags(match[3]).replace(/\s+/g, ' ').trim();
+    if (!text || text.length < 3) continue;
 
-    for (const [re, sec] of sectionMap) {
-      if (re.test(text)) { section = sec; break; }
+    if (tag === 'h2') {
+      // section heading
+      let newSection: MeetingPart['section'] | null = null;
+      for (const [re, sec] of sectionMap) {
+        if (re.test(text)) { newSection = sec; break; }
+      }
+      if (newSection) section = newSection;
+      // Skip emitting H2s as parts (these were the boilerplate "Étude de La Tour
+      // de Garde" / "Autres publications…" headings)
+      continue;
     }
 
-    // Try to extract time "(10 min)" pattern
-    const timeM = text.match(/\((\d+\s*min)\)/i);
-    const time = timeM ? timeM[1] : undefined;
+    // h3 — a meeting part
+    // Dedupe: WOL sometimes repeats the same h3 (eg in nav + content)
+    const dedupKey = text.toLowerCase();
+    if (seenTitles.has(dedupKey)) continue;
+    seenTitles.add(dedupKey);
 
-    // Bible reference patterns: "Matthew 6:9-13", "Genesis 1:1"
-    const bibleM = text.match(/([1-3]?\s*[A-Z][a-z]+\.?\s+\d+:\d+[\d,\s–-]*)/);
+    // Title-based section override (catches opening/closing rows even when
+    // there was no matching H2 right before them).
+    let rowSection: MeetingPart['section'] = section;
+    if (/intwodiksyon|introduction|opening|kantik.*priyè|pawòl entwodiksyon/i.test(text)
+        && !/konklizyon|closing|conclusion/i.test(text)) {
+      rowSection = 'opening';
+    } else if (/konklizyon|conclusion|closing|kantik final|kantik\s+\d+\s+ak\s+priyè\s*$/i.test(text)) {
+      rowSection = 'closing';
+    }
+
+    // Skip standalone "Kantik N" / "Cantique N" / "Song N" lines unless they
+    // also describe a prayer / introduction / conclusion combo.
+    if (/^(kantik|cantique|song)\s+\d+$/i.test(text)
+        && rowSection !== 'opening'
+        && rowSection !== 'closing') {
+      continue;
+    }
+
+    // Extract time "(10 min)" pattern
+    const timeM = text.match(/\((\d+\s*min[.]?)\)/i);
+    const time = timeM ? timeM[1].replace(/\.$/, '') : undefined;
+
+    // Strip leading "N. " number from title
+    const cleanTitle = text
+      .replace(/\(\d+\s*min[.]?\)/i, '')
+      .replace(/^\d+\.\s*/, '')
+      .trim();
+
+    // Bible reference patterns
+    const bibleM = cleanTitle.match(/([1-3]?\s*[A-Z][a-z]+\.?\s+\d+:\d+[\d,\s–-]*)/);
     const bibleRef = bibleM ? bibleM[1].trim() : undefined;
 
-    // Publication refs like "jr 21 ¶12", "mwb22.03 ¶4"
+    // Publication refs
     const refRe = /\b([a-z]{1,5}\d{0,4}(?:\.\d+)?\s+¶?\d+)\b/gi;
     const refs: string[] = [];
     let refM;
-    while ((refM = refRe.exec(text)) !== null) refs.push(refM[1]);
+    while ((refM = refRe.exec(cleanTitle)) !== null) refs.push(refM[1]);
 
     parts.push({
       id: `part-${idx++}`,
-      section,
-      title: text.replace(/\(\d+\s*min\)/i, '').trim(),
+      section: rowSection,
+      title: cleanTitle,
       time,
       bibleRef,
       references: refs.length ? refs : undefined,
-      hasVideo: /video|video clip/i.test(text),
-      icon: iconMap[section],
+      hasVideo: /video|video clip|videyo/i.test(text),
+      icon: iconMap[rowSection],
     });
   }
 
-  // Fallback: if no headings parsed, produce a generic structure
+  // Fallback: if no h3 parsed, produce a generic structure
   if (parts.length === 0) {
     const fallback: MeetingPart['section'][] = ['opening', 'treasures', 'ministry', 'living', 'closing'];
     const titles = [
       'Opening Song & Prayer',
-      'Treasures From God\'s Word',
+      "Treasures From God's Word",
       'Apply Yourself to the Field Ministry',
       'Living as Christians',
       'Closing Song & Prayer',
@@ -256,9 +297,12 @@ function PartCard({ part, onPress }: { part: MeetingPart; onPress: () => void })
             )}
           </XStack>
           {part.bibleRef && (
-            <SizableText size="$3" color="#7B9E5B">
-              📖 {part.bibleRef}
-            </SizableText>
+            <XStack alignItems="center" gap="$1" marginTop="$1">
+              <BookOpen size={12} color="#7B9E5B" />
+              <SizableText size="$3" color="#7B9E5B">
+                {part.bibleRef}
+              </SizableText>
+            </XStack>
           )}
           {part.references && part.references.length > 0 && (
             <XStack gap="$1" flexWrap="wrap">
@@ -345,20 +389,37 @@ export default function MeetingsScreen() {
     setMeetingData([]);
     try {
       const lang = await getLang();
-      const url = `https://wol.jw.org/${lang.symbol}/wol/meetings/${lang.wolRegion}/${lang.wolLang}/${year}/${week}`;
-      const resp = await fetch(url, {
-        signal: AbortSignal.timeout(12000),
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const html = await resp.text();
-      const parts = parseMeetingParts(html);
+      // Step 1 — fetch the meetings HUB
+      const hubUrl = `https://wol.jw.org/${lang.symbol}/wol/meetings/${lang.wolRegion}/${lang.wolLang}/${year}/${week}`;
+      const hubResp = await fetch(hubUrl, { signal: AbortSignal.timeout(12000) });
+      if (!hubResp.ok) throw new Error(`HTTP ${hubResp.status}`);
+      const hubHtml = await hubResp.text();
+
+      // Step 2 — extract the FIRST article link under "Vie et ministère / Our
+      // Christian Life and Ministry / Lavi nou antankè Kretyen" section. The
+      // hub lists the actual mwb article as the first /wol/d/ link.
+      const articleLinkRe = new RegExp(
+        `href="(/${lang.symbol}/wol/d/${lang.wolRegion}/${lang.wolLang}/\\d+)"`,
+        'i',
+      );
+      const linkMatch = articleLinkRe.exec(hubHtml);
+      let mwbHtml = '';
+      if (linkMatch) {
+        const articleUrl = `https://wol.jw.org${linkMatch[1]}`;
+        const artResp = await fetch(articleUrl, { signal: AbortSignal.timeout(12000) });
+        if (artResp.ok) mwbHtml = await artResp.text();
+      }
+
+      // Step 3 — parse the mwb article (preferred) or fall back to hub HTML
+      const sourceHtml = mwbHtml || hubHtml;
+      const parts = parseMeetingParts(sourceHtml);
       setMeetingData(parts);
     } catch (err: any) {
       setError(err?.message ?? 'unknown');
       // Show fallback structure
       setMeetingData([
         { id: 'f0', section: 'opening', title: 'Opening Song & Prayer', icon: '🎵' },
-        { id: 'f1', section: 'treasures', title: 'Treasures From God\'s Word (10 min)', time: '10 min', icon: '💎' },
+        { id: 'f1', section: 'treasures', title: "Treasures From God's Word (10 min)", time: '10 min', icon: '💎' },
         { id: 'f2', section: 'treasures', title: 'Spiritual Gems (10 min)', time: '10 min', icon: '💡' },
         { id: 'f3', section: 'treasures', title: 'Bible Reading (4 min)', time: '4 min', icon: '📖' },
         { id: 'f4', section: 'ministry', title: 'Apply Yourself to the Field Ministry', icon: '📋' },

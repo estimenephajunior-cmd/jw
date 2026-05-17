@@ -49,3 +49,36 @@ Editorial / devotional aesthetic.
 
 ## Dependencies Added
 expo-clipboard@~8.0.8, @tamagui/config@^1.114.0, tamagui@^1.114.0, @tamagui/core@^1.114.0, @tamagui/lucide-icons
+
+## Iteration 2 — Functional Bug Fixes (2026-01)
+
+### Fixed
+1. **Watchtower paragraph parser** (`app/watchtower-study.tsx`)
+   - Was matching every `<p data-pid>` → produced ~40 entries for a 17-paragraph article
+   - Now matches only paragraphs with `data-rel-pid="[N]"` (real study paragraphs)
+   - Uses `data-pnum` from inner `<span class="parNum">` as visible number
+   - Strips the parNum span so the number isn't rendered twice
+   - Verified: 17 paragraphs against article 2025560 (matches WOL exactly)
+2. **Question pairing**
+   - Was assigning questions sequentially (wrong pairings)
+   - Now builds a `questionsByPid` map then pairs each paragraph via its `data-rel-pid`
+   - Each paragraph shows its real matching question above it
+3. **Bible verse refs as tappable chips + inline preview modal**
+   - Extracts `<a class="b" href=...>verse</a>` from paragraph HTML pre-strip
+   - Renders chips below paragraph text (sage moss styling)
+   - Opens a Sheet modal that fetches the verse HTML from WOL and displays clean text
+4. **Midweek meeting parser** (`app/(tabs)/meetings.tsx`)
+   - Was parsing the meetings HUB page directly — surfaced unrelated H2s like "Étude de La Tour de Garde" and "Autres publications pour les réunions" as if they were parts
+   - Now drills: hub → first `/wol/d/...` link → fetch that mwb article → parse H3s under H2 sections
+   - Multi-lingual section regex (EN + FR + HT)
+   - H2s now used only for section context, not emitted as parts
+   - Title-based opening/closing override catches Kantik+priyè rows
+   - Dedupes repeated H3s; removed `📖` emoji prefix from bibleRef line
+5. **`getPublicationContent` WOL fallback** (`services/jwApiService.ts`)
+   - Primary b.jw-cdn.org endpoint returns 404 for some docids
+   - Added WOL public HTML fallback wrapped to match the existing `{items:[{content,title}]}` shape
+6. **Preview server restarted** — Expo dev server back on port 3000
+
+### Not Touched (deferred)
+- Codex redesign of `daily-text.tsx` and `meeting-prep.tsx` detail screens (still using legacy dark palette inside)
+- Inner list cards on Library/Study/Meetings for full light-mode parity

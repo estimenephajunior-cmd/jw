@@ -38,12 +38,17 @@ import type { GeneratedAnswer } from '@/types';
 type AnswerLength = 'short' | 'medium' | 'long';
 type AnswerTone = 'natural' | 'heartfelt' | 'scriptural';
 
+interface BibleRef {
+  text: string;       // e.g. "Mat. 5:3"
+  href: string;       // absolute WOL URL
+}
 interface ParsedParagraph {
   id: string;
   number: number;
   text: string;
   dataPid?: string;
   questions: string[];
+  bibleRefs: BibleRef[];
 }
 
 interface AudioState {
@@ -82,71 +87,85 @@ function stripHtml(html: string): string {
     .trim();
 }
 
-function parseParagraphs(html: string): ParsedParagraph[] {
+function parseParagraphs(html: string, langSymbol: string = 'en'): ParsedParagraph[] {
   if (!html) return [];
 
-  const paragraphs: ParsedParagraph[] = [];
-  let pNum = 0;
+  const BASE = 'https://wol.jw.org';
 
-  // Match <p ...> tags with data-pid attributes
-  const pRegex = /<p([^>]*)>([\s\S]*?)<\/p>/gi;
-  let match;
-
-  while ((match = pRegex.exec(html)) !== null) {
-    const attrs = match[1] ?? '';
-    const content = match[2] ?? '';
-
-    // Only include numbered paragraphs (data-pid usually corresponds to article paragraphs)
+  // ── 1. Index all questions by their data-pid ────────────────
+  // Question pattern:  <p ... class="...qu..." ... data-pid="X" ...>...</p>
+  const questionsByPid = new Map<string, string>();
+  const qRegex = /<p\b([^>]*\bclass="[^"]*\bqu\b[^"]*"[^>]*)>([\s\S]*?)<\/p>/gi;
+  let qm: RegExpExecArray | null;
+  while ((qm = qRegex.exec(html)) !== null) {
+    const attrs = qm[1] ?? '';
     const pidMatch = /data-pid="(\d+)"/.exec(attrs);
     if (!pidMatch) continue;
+    const text = stripHtml(qm[2] ?? '').replace(/^\d+\.\s*/, '').trim();
+    if (text.length < 8) continue;
+    questionsByPid.set(pidMatch[1], text);
+  }
 
-    // Skip very short "paragraphs" that are likely headings or captions
-    const stripped = stripHtml(content);
-    if (stripped.length < 30) continue;
+  // ── 2. Real study paragraphs: have data-rel-pid="[N]" ───────
+  // Pattern: <p id="pX" data-pid="X" data-rel-pid="[Y]">…<span class="parNum" data-pnum="N">…
+  const paragraphs: ParsedParagraph[] = [];
+  const pRegex = /<p\b([^>]*\bdata-rel-pid="\[(\d+)\][^"]*"[^>]*)>([\s\S]*?)<\/p>/gi;
+  let pm: RegExpExecArray | null;
+  let fallbackNum = 0;
+  while ((pm = pRegex.exec(html)) !== null) {
+    const attrs = pm[1] ?? '';
+    const relPid = pm[2] ?? '';
+    let raw = pm[3] ?? '';
 
-    pNum++;
+    // skip questions/comments accidentally caught
+    if (/\bclass="[^"]*\bqu\b[^"]*"/.test(attrs)) continue;
+
+    // visible paragraph number from <span class="parNum" data-pnum="N">
+    const pnumMatch = /<span[^>]*class="[^"]*parNum[^"]*"[^>]*data-pnum="(\d+)"/i.exec(raw)
+      ?? /data-pnum="(\d+)"/i.exec(raw);
+    const visibleNum = pnumMatch ? parseInt(pnumMatch[1], 10) : ++fallbackNum;
+
+    // remove the <span class="parNum">…</span> (the leading number markup) so we
+    // don't render it twice next to the badge.
+    raw = raw.replace(/<span[^>]*class="[^"]*parNum[^"]*"[^>]*>[\s\S]*?<\/span>/i, '');
+
+    // extract bible refs (<a class="b" href="...">verse</a>) BEFORE stripping html
+    const bibleRefs: BibleRef[] = [];
+    const aRegex = /<a\b([^>]*\bclass="[^"]*\bb\b[^"]*"[^>]*)>([\s\S]*?)<\/a>/gi;
+    let am: RegExpExecArray | null;
+    while ((am = aRegex.exec(raw)) !== null) {
+      const hrefMatch = /href="([^"]+)"/.exec(am[1] ?? '');
+      const text = stripHtml(am[2] ?? '').trim();
+      if (!hrefMatch || !text) continue;
+      const href = hrefMatch[1].startsWith('http')
+        ? hrefMatch[1]
+        : `${BASE}${hrefMatch[1]}`;
+      bibleRefs.push({ text, href });
+    }
+
+    const text = stripHtml(raw);
+    if (text.length < 30) continue;
+
+    const pidMatch = /data-pid="(\d+)"/.exec(attrs);
+    const paragraphPid = pidMatch ? pidMatch[1] : `rel${relPid}`;
+
     paragraphs.push({
-      id: `p-${pidMatch[1]}`,
-      number: pNum,
-      text: stripped,
-      dataPid: pidMatch[1],
-      questions: [],
+      id: `p-${paragraphPid}`,
+      number: visibleNum,
+      text,
+      dataPid: paragraphPid,
+      questions: questionsByPid.get(relPid) ? [questionsByPid.get(relPid)!] : [],
+      bibleRefs,
     });
   }
 
-  // Fallback: if no data-pid paragraphs found, just split by <p>
-  if (paragraphs.length === 0) {
-    const simpleRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
-    let n = 0;
-    while ((match = simpleRegex.exec(html)) !== null) {
-      const stripped = stripHtml(match[1] ?? '');
-      if (stripped.length < 40) continue;
-      n++;
-      paragraphs.push({
-        id: `p-fallback-${n}`,
-        number: n,
-        text: stripped,
-        questions: [],
-      });
-    }
-  }
+  // Sort by visible number to keep article order
+  paragraphs.sort((a, b) => a.number - b.number);
 
   return paragraphs;
 }
 
-function extractQuestionsFromHtml(html: string): { pidNums: number[]; text: string }[] {
-  const questions: { pidNums: number[]; text: string }[] = [];
-  // Question patterns: look for elements with question styling or numbered list items
-  const qRegex = /<(?:li|p)[^>]*class="[^"]*(?:question|qu)[^"]*"[^>]*>([\s\S]*?)<\/(?:li|p)>/gi;
-  let match;
-  while ((match = qRegex.exec(html)) !== null) {
-    const text = stripHtml(match[1] ?? '').trim();
-    if (text.length > 10 && text.includes('?')) {
-      questions.push({ pidNums: [], text });
-    }
-  }
-  return questions;
-}
+// (questions are now extracted inside parseParagraphs and paired via data-rel-pid)
 
 // ── Audio player (native only via expo-av) ────────────────────
 interface AudioPlayerProps {
@@ -207,8 +226,9 @@ interface ParagraphCardProps {
   para: ParsedParagraph;
   articleTitle: string;
   onPrepare: (para: ParsedParagraph, question: string) => void;
+  onPreviewVerse: (ref: BibleRef) => void;
 }
-function ParagraphCard({ para, articleTitle, onPrepare }: ParagraphCardProps) {
+function ParagraphCard({ para, articleTitle, onPrepare, onPreviewVerse }: ParagraphCardProps) {
   return (
     <Card
       backgroundColor="#2C2C2E"
@@ -218,7 +238,17 @@ function ParagraphCard({ para, articleTitle, onPrepare }: ParagraphCardProps) {
       borderColor="#3A3A3C"
       gap="$3"
     >
-      {/* Paragraph number */}
+      {/* Question above paragraph (matches WOL layout) */}
+      {para.questions.length > 0 && (
+        <XStack gap="$2" alignItems="flex-start">
+          <AlignLeft size={14} color="#C4A840" style={{ marginTop: 3 }} />
+          <SizableText size="$3" color="#E5D9A8" flex={1} lineHeight={20} fontStyle="italic">
+            {para.number}. {para.questions[0]}
+          </SizableText>
+        </XStack>
+      )}
+
+      {/* Paragraph number + text */}
       <XStack gap="$3" alignItems="flex-start">
         <YStack
           width={28}
@@ -237,47 +267,156 @@ function ParagraphCard({ para, articleTitle, onPrepare }: ParagraphCardProps) {
         </SizableText>
       </XStack>
 
-      {/* Questions */}
-      {para.questions.length > 0 && (
+      {/* Bible verse chips */}
+      {para.bibleRefs.length > 0 && (
         <YStack gap="$2">
           <Separator borderColor="#3A3A3C" />
-          {para.questions.map((q, qi) => (
-            <XStack key={qi} gap="$2" alignItems="flex-start">
-              <AlignLeft size={14} color="#7B6B9E" style={{ marginTop: 3 }} />
-              <SizableText size="$3" color="#9CA3AF" flex={1} lineHeight={20}>{q}</SizableText>
-            </XStack>
-          ))}
-          <Button
-            size="$2"
-            backgroundColor="rgba(91,126,107,0.1)"
-            borderColor="rgba(91,126,107,0.25)"
-            borderWidth={1}
-            color="#5B7E6B"
-            alignSelf="flex-start"
-            icon={<Zap size={12} color="#5B7E6B" />}
-            onPress={() => onPrepare(para, para.questions[0] ?? '')}
-          >
-            Prepare Answer
-          </Button>
+          <XStack gap="$2" flexWrap="wrap">
+            {para.bibleRefs.map((ref, i) => (
+              <Button
+                key={`${ref.text}-${i}`}
+                size="$2"
+                backgroundColor="rgba(91,126,107,0.10)"
+                borderColor="rgba(91,126,107,0.35)"
+                borderWidth={1}
+                color="#7DA88E"
+                onPress={() => onPreviewVerse(ref)}
+                icon={<BookOpen size={11} color="#7DA88E" />}
+              >
+                {ref.text}
+              </Button>
+            ))}
+          </XStack>
         </YStack>
       )}
 
-      {/* Even without questions, show a prepare button */}
-      {para.questions.length === 0 && (
-        <Button
-          size="$2"
-          backgroundColor="rgba(91,126,107,0.08)"
-          borderColor="#3A3A3C"
-          borderWidth={1}
-          color="#6B7280"
-          alignSelf="flex-start"
-          icon={<Zap size={12} color="#6B7280" />}
-          onPress={() => onPrepare(para, `What stood out to you in paragraph ${para.number}?`)}
-        >
-          Prepare Comment
-        </Button>
-      )}
+      {/* Prepare answer button */}
+      <Button
+        size="$2"
+        backgroundColor="rgba(91,126,107,0.1)"
+        borderColor="rgba(91,126,107,0.25)"
+        borderWidth={1}
+        color="#5B7E6B"
+        alignSelf="flex-start"
+        icon={<Zap size={12} color="#5B7E6B" />}
+        onPress={() =>
+          onPrepare(
+            para,
+            para.questions[0] ?? `What stood out to you in paragraph ${para.number}?`,
+          )
+        }
+      >
+        {para.questions.length > 0 ? 'Prepare Answer' : 'Prepare Comment'}
+      </Button>
     </Card>
+  );
+}
+
+// ── Bible verse preview sheet ─────────────────────────────────
+interface VerseSheetProps {
+  open: boolean;
+  verse: BibleRef | null;
+  onClose: () => void;
+}
+function VerseSheet({ open, verse, onClose }: VerseSheetProps) {
+  const [text, setText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    if (!open || !verse) return;
+    setText(''); setErr(''); setLoading(true);
+    (async () => {
+      try {
+        // WOL Bible Citation endpoint returns a small fragment with the verse text.
+        const res = await fetch(verse.href, { headers: { Accept: 'text/html' } });
+        if (!res.ok) throw new Error('http ' + res.status);
+        const html = await res.text();
+        // Pull the verse content out of the popup body
+        const bodyMatch =
+          /<div[^>]*class="[^"]*(?:popupBody|cnt|bibleSrc)[^"]*"[^>]*>([\s\S]*?)<\/div>/i.exec(html)
+          ?? /<body[^>]*>([\s\S]*?)<\/body>/i.exec(html);
+        let raw = bodyMatch ? bodyMatch[1] : html;
+        // strip footnote markers
+        raw = raw
+          .replace(/<sup[^>]*class="[^"]*(?:fn|fnref)[^"]*"[^>]*>[\s\S]*?<\/sup>/gi, '')
+          .replace(/<a[^>]*class="[^"]*fn[^"]*"[^>]*>[\s\S]*?<\/a>/gi, '');
+        const clean = raw
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<\/p>/gi, '\n\n')
+          .replace(/<sup[^>]*>(\d+)<\/sup>/gi, ' $1 ')
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&[a-z]+;/g, ' ')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+        if (!clean) throw new Error('empty');
+        setText(clean.slice(0, 2400));
+      } catch (e: any) {
+        setErr('Could not load verse. Open on WOL instead.');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [open, verse]);
+
+  if (!verse) return null;
+  return (
+    <Sheet
+      open={open}
+      onOpenChange={(v) => { if (!v) onClose(); }}
+      snapPoints={[70]}
+      modal
+      dismissOnSnapToBottom
+    >
+      <Sheet.Overlay />
+      <Sheet.Frame backgroundColor="#1C1C1E" borderTopLeftRadius="$6" borderTopRightRadius="$6">
+        <Sheet.Handle backgroundColor="#3A3A3C" />
+        <ScrollView flex={1} showsVerticalScrollIndicator={false}>
+          <YStack padding="$4" gap="$3" paddingBottom="$10">
+            <XStack alignItems="center" gap="$2">
+              <BookOpen size={16} color="#7DA88E" />
+              <SizableText size="$2" color="#7DA88E" fontWeight="700" letterSpacing={1.5}>
+                BIBLE VERSE
+              </SizableText>
+            </XStack>
+            <SizableText size="$6" color="#F2F2F7" fontWeight="800" style={{ fontFamily: 'Georgia, serif' }}>
+              {verse.text}
+            </SizableText>
+            {loading ? (
+              <YStack paddingVertical="$4" alignItems="center">
+                <Spinner size="small" color="#7DA88E" />
+              </YStack>
+            ) : err ? (
+              <YStack gap="$2">
+                <SizableText size="$3" color="#F59E0B">{err}</SizableText>
+                <Button
+                  size="$3"
+                  backgroundColor="rgba(220,159,98,0.15)"
+                  borderColor="rgba(220,159,98,0.35)"
+                  borderWidth={1}
+                  color="#DC9F62"
+                  onPress={() => {
+                    if (Platform.OS === 'web') {
+                      window.open(verse.href, '_blank');
+                    } else {
+                      import('react-native').then(({ Linking }) => Linking.openURL(verse.href));
+                    }
+                  }}
+                >
+                  Open on WOL
+                </Button>
+              </YStack>
+            ) : (
+              <SizableText size="$4" color="#E5E7EB" lineHeight={26} style={{ fontFamily: 'Georgia, serif' }}>
+                {text}
+              </SizableText>
+            )}
+          </YStack>
+        </ScrollView>
+      </Sheet.Frame>
+    </Sheet>
   );
 }
 
@@ -492,6 +631,10 @@ export default function WatchtowerStudyScreen() {
   const [activeParagraph, setActiveParagraph] = useState<ParsedParagraph | null>(null);
   const [activeQuestion, setActiveQuestion] = useState('');
 
+  // Bible verse preview state
+  const [verseOpen, setVerseOpen] = useState(false);
+  const [activeVerse, setActiveVerse] = useState<BibleRef | null>(null);
+
   // Audio state
   const [audioState, setAudioState] = useState<AudioState>({
     isLoaded: false,
@@ -513,7 +656,13 @@ export default function WatchtowerStudyScreen() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const raw = await getPublicationContent(docId!, langCode) as {
+      const raw = await getPublicationContent(
+        docId!,
+        langCode,
+        language?.symbol ?? 'en',
+        language?.wolRegion ?? 'r1',
+        language?.wolLangParam ?? 'lp-e',
+      ) as {
         items?: Array<{ content?: string; title?: string; citation?: string }>;
         title?: string;
       };
@@ -530,22 +679,8 @@ export default function WatchtowerStudyScreen() {
         setThemeScripture(scriptureMatch[1].trim());
       }
 
-      // Parse paragraphs
-      const parsed = parseParagraphs(html);
-
-      // Try to extract questions from the HTML
-      const rawQuestions = extractQuestionsFromHtml(html);
-
-      // Distribute questions to paragraphs (simple heuristic: assign sequentially)
-      if (rawQuestions.length > 0) {
-        let qi = 0;
-        parsed.forEach((para) => {
-          if (qi < rawQuestions.length) {
-            para.questions = [rawQuestions[qi].text];
-            qi++;
-          }
-        });
-      }
+      // Parse paragraphs (also pairs questions and extracts Bible refs)
+      const parsed = parseParagraphs(html, langCode.toLowerCase());
 
       setParagraphs(parsed);
 
@@ -718,11 +853,19 @@ export default function WatchtowerStudyScreen() {
                 para={item}
                 articleTitle={articleTitle}
                 onPrepare={handlePrepare}
+                onPreviewVerse={(ref) => { setActiveVerse(ref); setVerseOpen(true); }}
               />
             </YStack>
           )}
         />
       )}
+
+      {/* Bible verse preview sheet */}
+      <VerseSheet
+        open={verseOpen}
+        verse={activeVerse}
+        onClose={() => setVerseOpen(false)}
+      />
 
       {/* Answer preparation sheet */}
       <AnswerSheet
