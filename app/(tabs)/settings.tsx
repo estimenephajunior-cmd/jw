@@ -33,10 +33,11 @@ import {
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAppStore } from '@/store/appStore';
-import { useTheme as useCodexTheme } from '@/constants/theme';
 import { clearAllData } from '@/services/storageService';
 import { getLanguages } from '@/services/languageService';
+import { createTranslator, DISPLAY_LANGUAGES, saveLanguagePair } from '@/services/i18nService';
 import type { Language } from '@/types';
+import { usePremiumTheme } from '@/hooks/usePremiumTheme';
 
 const STORAGE_KEYS = {
   LANGUAGE: 'jw_sa:language',
@@ -161,8 +162,12 @@ interface LanguagePickerProps {
   onClose: () => void;
   currentCode: string;
   onSelect: (lang: Language) => void;
+  title: string;
+  placeholder: string;
+  emptyText: string;
+  fixedLanguages?: Language[];
 }
-function LanguagePicker({ open, onClose, currentCode, onSelect }: LanguagePickerProps) {
+function LanguagePicker({ open, onClose, currentCode, onSelect, title, placeholder, emptyText, fixedLanguages }: LanguagePickerProps) {
   const [languages, setLanguages] = useState<Language[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -170,11 +175,16 @@ function LanguagePicker({ open, onClose, currentCode, onSelect }: LanguagePicker
   useEffect(() => {
     if (!open) return;
     setLoading(true);
+    if (fixedLanguages) {
+      setLanguages(fixedLanguages);
+      setLoading(false);
+      return;
+    }
     getLanguages()
       .then(setLanguages)
       .catch(() => setLanguages([]))
       .finally(() => setLoading(false));
-  }, [open]);
+  }, [open, fixedLanguages]);
 
   const filtered = languages.filter((l) => {
     const q = search.trim().toLowerCase();
@@ -185,7 +195,7 @@ function LanguagePicker({ open, onClose, currentCode, onSelect }: LanguagePicker
   return (
     <Sheet
       open={open}
-      onOpenChange={(v) => { if (!v) onClose(); }}
+      onOpenChange={(v: boolean) => { if (!v) onClose(); }}
       snapPoints={[85]}
       modal
       dismissOnSnapToBottom
@@ -194,9 +204,9 @@ function LanguagePicker({ open, onClose, currentCode, onSelect }: LanguagePicker
       <Sheet.Frame backgroundColor="#1C1C1E" borderTopLeftRadius="$6" borderTopRightRadius="$6">
         <Sheet.Handle backgroundColor="#3A3A3C" />
         <YStack flex={1} padding="$4" gap="$3">
-          <SizableText size="$6" color="#F2F2F7" fontWeight="700">Select Language</SizableText>
+          <SizableText size="$6" color="#F2F2F7" fontWeight="700">{title}</SizableText>
           <Input
-            placeholder="Search languages…"
+            placeholder={placeholder}
             value={search}
             onChangeText={setSearch}
             backgroundColor="#2C2C2E"
@@ -242,7 +252,7 @@ function LanguagePicker({ open, onClose, currentCode, onSelect }: LanguagePicker
                 })}
                 {filtered.length === 0 && (
                   <SizableText color="#6B7280" textAlign="center" paddingTop="$6">
-                    No languages found
+                    {emptyText}
                   </SizableText>
                 )}
               </YStack>
@@ -259,11 +269,11 @@ interface DisclaimerSheetProps {
   open: boolean;
   onClose: () => void;
 }
-function DisclaimerSheet({ open, onClose }: DisclaimerSheetProps) {
+function DisclaimerSheet({ open, onClose, t }: DisclaimerSheetProps & { t: ReturnType<typeof createTranslator> }) {
   return (
     <Sheet
       open={open}
-      onOpenChange={(v) => { if (!v) onClose(); }}
+      onOpenChange={(v: boolean) => { if (!v) onClose(); }}
       snapPoints={[60]}
       modal
       dismissOnSnapToBottom
@@ -274,7 +284,7 @@ function DisclaimerSheet({ open, onClose }: DisclaimerSheetProps) {
         <YStack flex={1} padding="$5" gap="$4">
           <XStack gap="$3" alignItems="center">
             <Info size={22} color="#5B7E6B" />
-            <SizableText size="$6" color="#F2F2F7" fontWeight="700">About JW Study Assistant</SizableText>
+            <SizableText size="$6" color="#F2F2F7" fontWeight="700">{t('about_app')}</SizableText>
           </XStack>
           <YStack
             backgroundColor="#2C2C2E"
@@ -284,9 +294,7 @@ function DisclaimerSheet({ open, onClose }: DisclaimerSheetProps) {
             borderColor="#3A3A3C"
           >
             <SizableText size="$3" color="#D1D5DB" lineHeight={22}>
-              This app is not affiliated with or endorsed by Jehovah's Witnesses, JW.org, JW Library, or Watch Tower Bible and Tract Society.{'\n\n'}
-              It only helps users organize their personal study using publicly available JW.org/WOL content.{'\n\n'}
-              All scripture, article, and publication content is sourced directly from JW.org and Watchtower Online Library (WOL) and belongs to their respective copyright holders.
+              {t('disclaimer_full')}
             </SizableText>
           </YStack>
           <XStack gap="$3">
@@ -320,7 +328,7 @@ function DisclaimerSheet({ open, onClose }: DisclaimerSheetProps) {
             borderWidth={1}
             color="#9CA3AF"
           >
-            Close
+            {t('close')}
           </Button>
         </YStack>
       </Sheet.Frame>
@@ -331,14 +339,23 @@ function DisclaimerSheet({ open, onClose }: DisclaimerSheetProps) {
 // ── Main Screen ───────────────────────────────────────────────
 export default function SettingsScreen() {
   const router = useRouter();
+  const colors = usePremiumTheme();
   const language = useAppStore((s) => s.language);
   const setLanguage = useAppStore((s) => s.setLanguage);
+  const appLanguage = useAppStore((s) => s.appLanguage);
+  const setAppLanguage = useAppStore((s) => s.setAppLanguage);
+  const contentLanguage = useAppStore((s) => s.contentLanguage);
+  const setContentLanguage = useAppStore((s) => s.setContentLanguage);
   const userProfile = useAppStore((s) => s.userProfile);
-  const codexTheme = useCodexTheme();
+  const appTheme = useAppStore((s) => s.theme);
+  const setAppTheme = useAppStore((s) => s.setTheme);
+  const displaySymbol = appLanguage?.symbol || language?.symbol || 'en';
+  const t = createTranslator(displaySymbol);
 
   const [notifications, setNotifications] = useState<NotificationsConfig>(DEFAULT_NOTIFICATIONS);
-  const [theme, setTheme] = useState<'dark' | 'light' | 'system'>('dark');
-  const [langPickerOpen, setLangPickerOpen] = useState(false);
+  const [theme, setTheme] = useState<'dark' | 'light' | 'system'>(appTheme);
+  const [displayLangPickerOpen, setDisplayLangPickerOpen] = useState(false);
+  const [contentLangPickerOpen, setContentLangPickerOpen] = useState(false);
   const [disclaimerOpen, setDisclaimerOpen] = useState(false);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -351,9 +368,12 @@ export default function SettingsScreen() {
       }
     });
     AsyncStorage.getItem(STORAGE_KEYS.THEME).then((raw) => {
-      if (raw === 'light' || raw === 'dark' || raw === 'system') setTheme(raw);
+      if (raw === 'light' || raw === 'dark' || raw === 'system') {
+        setTheme(raw);
+        setAppTheme(raw);
+      }
     });
-  }, []);
+  }, [setAppTheme]);
 
   const saveNotifications = useCallback(async (config: NotificationsConfig) => {
     await AsyncStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(config));
@@ -365,26 +385,36 @@ export default function SettingsScreen() {
     saveNotifications(updated);
   };
 
-  const handleSelectLanguage = async (lang: Language) => {
-    setLanguage(lang);
-    await AsyncStorage.setItem(STORAGE_KEYS.LANGUAGE, JSON.stringify(lang));
-    toast('Language updated', { message: `Switched to ${lang.englishName}`, variant: 'success' });
+  const handleSelectDisplayLanguage = async (lang: Language) => {
+    setAppLanguage(lang);
+    const currentContent = contentLanguage ?? language ?? lang;
+    await saveLanguagePair(lang, currentContent);
+    toast(t('language_updated'), { message: t('switched_to_language', { language: lang.name }), variant: 'success' });
   };
 
-  const handleTheme = async (t: 'dark' | 'light' | 'system') => {
-    setTheme(t);
-    await AsyncStorage.setItem(STORAGE_KEYS.THEME, t);
-    if (t === 'light' || t === 'dark') codexTheme.setMode(t);
-    toast('Theme updated', { variant: 'success' });
+  const handleSelectContentLanguage = async (lang: Language) => {
+    setContentLanguage(lang);
+    setLanguage(lang);
+    const currentDisplay = appLanguage ?? DISPLAY_LANGUAGES[0];
+    await saveLanguagePair(currentDisplay, lang);
+    await AsyncStorage.setItem(STORAGE_KEYS.LANGUAGE, JSON.stringify(lang));
+    toast(t('content_language_updated'), { message: t('switched_to_language', { language: lang.englishName }), variant: 'success' });
+  };
+
+  const handleTheme = async (nextTheme: 'dark' | 'light' | 'system') => {
+    setTheme(nextTheme);
+    setAppTheme(nextTheme);
+    await AsyncStorage.setItem(STORAGE_KEYS.THEME, nextTheme);
+    toast(t('theme_updated'), { variant: 'success' });
   };
 
   const handleClearAllData = async () => {
     setIsSaving(true);
     try {
       await clearAllData();
-      toast('Data cleared', { message: 'All local data has been removed.', variant: 'success' });
+      toast(t('data_cleared'), { message: t('all_local_data_removed'), variant: 'success' });
     } catch {
-      toast('Failed to clear data', { variant: 'error' });
+      toast(t('failed_clear_data'), { variant: 'error' });
     } finally {
       setIsSaving(false);
       setClearConfirmOpen(false);
@@ -392,39 +422,51 @@ export default function SettingsScreen() {
   };
 
   const spiritualLabel: Record<string, string> = {
-    publisher: 'Publisher',
-    baptized: 'Baptized Publisher',
-    pioneer: 'Pioneer',
-    elder: 'Elder',
-    ms: 'Ministerial Servant',
-    'bible-student': 'Bible Student',
-    other: 'Interested Person',
+    publisher: t('publisher'),
+    baptized: t('baptized_publisher'),
+    pioneer: t('pioneer'),
+    elder: t('elder'),
+    ms: t('ministerial_servant'),
+    'bible-student': t('bible_student'),
+    other: t('interested_person'),
   };
 
-  const themeLabel = { dark: 'Dark', light: 'Light', system: 'System' };
+  const themeLabel = { dark: t('dark'), light: t('light'), system: t('system') };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: codexTheme.t.bg }} testID="settings-screen">
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
       <ScrollView flex={1} showsVerticalScrollIndicator={false}>
         <YStack padding="$5" gap="$5" paddingBottom="$10">
           {/* Header */}
-          <SizableText size="$8" color="#F2F2F7" fontWeight="800">Settings</SizableText>
+          <YStack
+            padding="$5"
+            borderRadius="$7"
+            backgroundColor={colors.surface}
+            borderWidth={1}
+            borderColor={colors.border}
+            gap="$2"
+          >
+            <SizableText size="$8" color={colors.text} fontWeight="900" letterSpacing={-0.6}>{t('settings')}</SizableText>
+            <SizableText size="$3" color={colors.textMuted} lineHeight={20}>
+              {t('language_content')} · {t('appearance')} · {t('data')}
+            </SizableText>
+          </YStack>
 
           {/* ── 1. Language & Content ── */}
           <YStack gap="$2">
-            <SectionLabel label="Language & Content" />
+            <SectionLabel label={t('language_content')} />
             <SettingsCard>
               <NavRow
                 icon={<Globe size={18} color="#5B7E6B" />}
-                label="Display Language"
-                value={language?.englishName ?? 'English'}
-                onPress={() => setLangPickerOpen(true)}
+                label={t('display_language')}
+                value={appLanguage?.name ?? 'English'}
+                onPress={() => setDisplayLangPickerOpen(true)}
               />
               <NavRow
                 icon={<Globe size={18} color="#5A7B9E" />}
-                label="Content Language"
-                value={language?.englishName ?? 'English'}
-                onPress={() => setLangPickerOpen(true)}
+                label={t('content_language')}
+                value={contentLanguage?.englishName ?? language?.englishName ?? 'English'}
+                onPress={() => setContentLangPickerOpen(true)}
                 last
               />
             </SettingsCard>
@@ -432,12 +474,12 @@ export default function SettingsScreen() {
 
           {/* ── 2. Spiritual Profile ── */}
           <YStack gap="$2">
-            <SectionLabel label="Spiritual Profile" />
+            <SectionLabel label={t('spiritual_profile')} />
             <SettingsCard>
               <NavRow
                 icon={<User size={18} color="#7B6B9E" />}
-                label="Edit Profile"
-                value={userProfile ? spiritualLabel[userProfile.spiritualStatus] ?? '' : 'Not set'}
+                label={t('edit_profile')}
+                value={userProfile ? spiritualLabel[userProfile.spiritualStatus] ?? '' : t('not_set')}
                 onPress={() => router.push('/edit-profile')}
                 last
               />
@@ -446,32 +488,32 @@ export default function SettingsScreen() {
 
           {/* ── 3. Notifications ── */}
           <YStack gap="$2">
-            <SectionLabel label="Notifications" />
+            <SectionLabel label={t('notifications')} />
             <SettingsCard>
               <ToggleRow
                 icon={<Bell size={18} color="#F59E0B" />}
-                label="Daily Text Reminder"
-                subtitle={notifications.dailyText ? `Reminds at ${notifications.dailyTextTime}` : 'Off'}
+                label={t('daily_text_reminder')}
+                subtitle={notifications.dailyText ? t('reminds_at_time', { time: notifications.dailyTextTime }) : t('off')}
                 value={notifications.dailyText}
                 onValueChange={(v) => updateNotification('dailyText', v)}
               />
               <ToggleRow
                 icon={<BookOpen size={18} color="#5B7E6B" />}
-                label="Meeting Preparation"
-                subtitle="Monday reminder"
+                label={t('meeting_preparation')}
+                subtitle={t('monday_reminder')}
                 value={notifications.meetingPrep}
                 onValueChange={(v) => updateNotification('meetingPrep', v)}
               />
               <ToggleRow
                 icon={<BookOpen size={18} color="#7B6B9E" />}
-                label="Watchtower Study"
-                subtitle="Friday reminder"
+                label={t('watchtower_study')}
+                subtitle={t('friday_reminder')}
                 value={notifications.watchtowerStudy}
                 onValueChange={(v) => updateNotification('watchtowerStudy', v)}
               />
               <ToggleRow
                 icon={<User size={18} color="#9E7B5A" />}
-                label="Return Visit Reminders"
+                label={t('return_visit_reminders')}
                 value={notifications.returnVisits}
                 onValueChange={(v) => updateNotification('returnVisits', v)}
                 last
@@ -481,12 +523,12 @@ export default function SettingsScreen() {
 
           {/* ── 4. Appearance ── */}
           <YStack gap="$2">
-            <SectionLabel label="Appearance" />
+            <SectionLabel label={t('appearance')} />
             <SettingsCard>
               <YStack paddingHorizontal="$4" paddingVertical="$3" gap="$3">
                 <XStack gap="$3" alignItems="center">
                   <Sun size={18} color="#F59E0B" />
-                  <SizableText size="$4" color="#F2F2F7" flex={1}>Theme</SizableText>
+                  <SizableText size="$4" color="#F2F2F7" flex={1}>{t('theme')}</SizableText>
                 </XStack>
                 <XStack gap="$2">
                   {(['dark', 'light', 'system'] as const).map((t) => (
@@ -518,16 +560,16 @@ export default function SettingsScreen() {
 
           {/* ── 5. About & Disclaimer ── */}
           <YStack gap="$2">
-            <SectionLabel label="About & Disclaimer" />
+            <SectionLabel label={t('about_disclaimer')} />
             <SettingsCard>
               <NavRow
                 icon={<Info size={18} color="#9CA3AF" />}
-                label="About JW Study Assistant"
+                label={t('about_app')}
                 onPress={() => setDisclaimerOpen(true)}
               />
               <YStack paddingHorizontal="$4" paddingVertical="$3" gap="$2">
-                <SizableText size="$2" color="#6B7280">App Version</SizableText>
-                <SizableText size="$4" color="#9CA3AF">1.0.0</SizableText>
+                <SizableText size="$2" color="#6B7280">{t('app_version')}</SizableText>
+                <SizableText size="$4" color="#9CA3AF">1.0.7</SizableText>
               </YStack>
               <Separator borderColor="#3A3A3C" />
               <XStack paddingHorizontal="$4" paddingVertical="$3" gap="$2">
@@ -561,13 +603,13 @@ export default function SettingsScreen() {
 
           {/* ── 6. Data ── */}
           <YStack gap="$2">
-            <SectionLabel label="Data" />
+            <SectionLabel label={t('data')} />
             <SettingsCard>
               <NavRow
                 icon={<ExternalLink size={18} color="#9CA3AF" />}
-                label="Export Data"
-                value="Coming soon"
-                onPress={() => toast('Coming soon', { message: 'Export will be available in a future update.', variant: 'warning' })}
+                label={t('export_data')}
+                value={t('coming_soon')}
+                onPress={() => toast(t('coming_soon'), { message: t('export_future_update'), variant: 'warning' })}
               />
               <BlinkDialog
                 trigger={
@@ -582,15 +624,15 @@ export default function SettingsScreen() {
                       <YStack width={28} alignItems="center">
                         <Trash2 size={18} color="#EF4444" />
                       </YStack>
-                      <SizableText size="$4" color="#EF4444" flex={1}>Clear All Data</SizableText>
+                      <SizableText size="$4" color="#EF4444" flex={1}>{t('clear_all_data')}</SizableText>
                       {isSaving
                         ? <Spinner size="small" color="#EF4444" />
                         : <ChevronRight size={16} color="#EF4444" />}
                     </XStack>
                   </YStack>
                 }
-                title="Clear all data?"
-                description="This will permanently delete all your saved items, profile, meeting notes, and study plans. This cannot be undone."
+                title={t('clear_all_data_question')}
+                description={t('clear_all_data_description')}
                 onConfirm={handleClearAllData}
                 onCancel={() => setClearConfirmOpen(false)}
                 open={clearConfirmOpen}
@@ -603,7 +645,7 @@ export default function SettingsScreen() {
           <YStack alignItems="center" paddingTop="$4" gap="$1">
             <SizableText size="$3" color="#4B5563">JW Study Assistant</SizableText>
             <SizableText size="$2" color="#374151" textAlign="center" maxWidth={280}>
-              Not affiliated with or endorsed by Jehovah's Witnesses, JW.org, or Watch Tower Society
+              {t('short_disclaimer')}
             </SizableText>
           </YStack>
         </YStack>
@@ -611,16 +653,31 @@ export default function SettingsScreen() {
 
       {/* Language picker sheet */}
       <LanguagePicker
-        open={langPickerOpen}
-        onClose={() => setLangPickerOpen(false)}
-        currentCode={language?.code ?? 'E'}
-        onSelect={handleSelectLanguage}
+        open={displayLangPickerOpen}
+        onClose={() => setDisplayLangPickerOpen(false)}
+        currentCode={appLanguage?.code ?? 'E'}
+        onSelect={handleSelectDisplayLanguage}
+        title={t('select_display_language')}
+        placeholder={t('search_languages')}
+        emptyText={t('no_languages_found')}
+        fixedLanguages={DISPLAY_LANGUAGES}
+      />
+
+      <LanguagePicker
+        open={contentLangPickerOpen}
+        onClose={() => setContentLangPickerOpen(false)}
+        currentCode={contentLanguage?.code ?? language?.code ?? 'E'}
+        onSelect={handleSelectContentLanguage}
+        title={t('select_content_language')}
+        placeholder={t('search_languages')}
+        emptyText={t('no_languages_found')}
       />
 
       {/* Disclaimer sheet */}
       <DisclaimerSheet
         open={disclaimerOpen}
         onClose={() => setDisclaimerOpen(false)}
+        t={t}
       />
     </SafeAreaView>
   );

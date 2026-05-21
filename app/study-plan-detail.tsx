@@ -23,19 +23,10 @@ import {
 } from '@blinkdotnew/mobile-ui';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient } from '@blinkdotnew/sdk';
 import type { StudyPlan, StudyWeek } from './(tabs)/study';
+import { generateAiText } from '@/services/localAiService';
 
 // ─── AI Client ────────────────────────────────────────────────────────────────
-
-let blinkClient: ReturnType<typeof createClient> | null = null;
-try {
-  const projectId = process.env.EXPO_PUBLIC_BLINK_PROJECT_ID;
-  const publishableKey = process.env.EXPO_PUBLIC_BLINK_PUBLISHABLE_KEY;
-  if (projectId && publishableKey) {
-    blinkClient = createClient({ projectId, publishableKey });
-  }
-} catch {}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -56,9 +47,7 @@ interface WeekGuide {
 }
 
 async function generateWeekGuide(week: StudyWeek): Promise<WeekGuide> {
-  if (!blinkClient) throw new Error('AI not configured.');
-
-  const result = await (blinkClient as any).ai.generateText({
+  const result = await generateAiText({
     system: `You are a JW Study Assistant. Generate a study guide for a personal study session based on a topic from JW.org materials. Only reference official Jehovah's Witnesses publications and scriptures. Respond in JSON with keys: keyPoints (string[]), suggestedScriptures (string[]), discussionQuestions (string[]), personalApplication (string), jwSource (string).`,
     messages: [{
       role: 'user',

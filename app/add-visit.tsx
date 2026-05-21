@@ -7,6 +7,8 @@ import {
 } from '@blinkdotnew/mobile-ui';
 import { ChevronLeft, Check, Plus, X } from '@blinkdotnew/mobile-ui';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAppStore } from '@/store/appStore';
+import { createTranslator } from '@/services/i18nService';
 
 const PRIMARY = '#5B7E6B';
 const BG = '#1C1C1E';
@@ -22,6 +24,9 @@ function generateId() {
 export default function AddVisitScreen() {
   const router = useRouter();
   const { contactId } = useLocalSearchParams<{ contactId: string }>();
+  const appLanguage = useAppStore((s) => s.appLanguage);
+  const language = useAppStore((s) => s.language);
+  const t = createTranslator(appLanguage?.symbol || language?.symbol || 'en');
 
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [topic, setTopic] = useState('');
@@ -51,11 +56,11 @@ export default function AddVisitScreen() {
         if (!contacts[idx].visits) contacts[idx].visits = [];
         contacts[idx].visits.unshift(visit);
         await AsyncStorage.setItem('jw_sa:contacts', JSON.stringify(contacts));
-        toast('Visit recorded', { message: 'Visit saved successfully', variant: 'success' });
+        toast(t('visit_recorded'), { message: t('visit_saved_successfully'), variant: 'success' });
         router.back();
       }
     } catch (e) {
-      toast('Error', { message: 'Could not save visit', variant: 'error' });
+      toast(t('error'), { message: t('could_not_save_visit'), variant: 'error' });
     } finally {
       setSaving(false);
     }
@@ -69,7 +74,7 @@ export default function AddVisitScreen() {
           <ChevronLeft size={24} color={TEXT_PRIMARY} />
         </TouchableOpacity>
         <SizableText size="$5" color={TEXT_PRIMARY} fontWeight="700" flex={1}>
-          Record Visit
+          {t('record_visit')}
         </SizableText>
       </XStack>
 
@@ -78,7 +83,7 @@ export default function AddVisitScreen() {
         
         {/* Date */}
         <YStack gap="$2">
-          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">Visit Date</SizableText>
+          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">{t('visit_date')}</SizableText>
           <Input
             value={date}
             onChangeText={setDate}
@@ -92,11 +97,11 @@ export default function AddVisitScreen() {
 
         {/* Topic */}
         <YStack gap="$2">
-          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">Topic Discussed</SizableText>
+          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">{t('topic_discussed')}</SizableText>
           <Input
             value={topic}
             onChangeText={setTopic}
-            placeholder="e.g. Hope of resurrection"
+            placeholder={t('topic_discussed_placeholder')}
             backgroundColor={CARD_BG}
             borderColor={CARD_BORDER}
             color={TEXT_PRIMARY}
@@ -106,11 +111,11 @@ export default function AddVisitScreen() {
 
         {/* Scriptures */}
         <YStack gap="$2">
-          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">Scriptures Used (comma separated)</SizableText>
+          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">{t('scriptures_used_comma')}</SizableText>
           <Input
             value={scriptures}
             onChangeText={setScriptures}
-            placeholder="e.g. John 3:16, Rev 21:4"
+            placeholder={t('scriptures_placeholder')}
             backgroundColor={CARD_BG}
             borderColor={CARD_BORDER}
             color={TEXT_PRIMARY}
@@ -120,11 +125,11 @@ export default function AddVisitScreen() {
 
         {/* Publications */}
         <YStack gap="$2">
-          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">Publications/Videos Shared</SizableText>
+          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">{t('publications_videos_shared')}</SizableText>
           <Input
             value={publications}
             onChangeText={setPublications}
-            placeholder="e.g. Good News from God brochure"
+            placeholder={t('publications_placeholder')}
             backgroundColor={CARD_BG}
             borderColor={CARD_BORDER}
             color={TEXT_PRIMARY}
@@ -134,7 +139,7 @@ export default function AddVisitScreen() {
 
         {/* Duration */}
         <YStack gap="$2">
-          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">Duration (minutes, optional)</SizableText>
+          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">{t('duration_minutes_optional')}</SizableText>
           <Input
             value={duration}
             onChangeText={setDuration}
@@ -149,11 +154,11 @@ export default function AddVisitScreen() {
 
         {/* Notes */}
         <YStack gap="$2">
-          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">Notes</SizableText>
+          <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="600">{t('notes')}</SizableText>
           <Input
             value={notes}
             onChangeText={setNotes}
-            placeholder="How did it go? What was the response?"
+            placeholder={t('visit_notes_placeholder')}
             multiline
             numberOfLines={4}
             backgroundColor={CARD_BG}
@@ -179,7 +184,7 @@ export default function AddVisitScreen() {
           }}
         >
           <SizableText size="$4" color="#fff" fontWeight="700">
-            {saving ? 'Saving...' : 'Save Visit Record'}
+            {saving ? t('saving') : t('save_visit_record')}
           </SizableText>
         </TouchableOpacity>
       </ScrollView>

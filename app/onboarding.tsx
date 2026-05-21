@@ -1,6 +1,3 @@
-// ============================================================
-// JW Study Assistant — Onboarding (Codex edition)
-// ============================================================
 import { useEffect, useRef, useState } from 'react';
 import {
   FlatList,
@@ -8,34 +5,31 @@ import {
   Platform,
   TouchableOpacity,
   Animated,
-  View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
+import { createTranslator, DISPLAY_LANGUAGES, saveLanguagePair } from '@/services/i18nService';
+import { getLanguageBySymbol } from '@/services/languageService';
+import { useAppStore } from '@/store/appStore';
+import type { Language as AppLanguage } from '@/types';
 import {
   YStack,
   XStack,
   SizableText,
+  H1,
+  H2,
   Paragraph,
+  Button,
   Input,
   ScrollView,
   Spinner,
   Card,
+  Separator,
 } from '@blinkdotnew/mobile-ui';
-import { useTheme, fonts } from '@/constants/theme';
 
-// Inline mini-icon (unicode-based) to avoid Tamagui theme context dependency in onboarding.
-function Glyph({ char, size = 14, color }: { char: string; size?: number; color: string }) {
-  return (
-    <SizableText style={{ fontFamily: fonts.mono, fontSize: size, color, lineHeight: size + 2, fontWeight: '700' }}>
-      {char}
-    </SizableText>
-  );
-}
+// ─── Types ───────────────────────────────────────────────────────────────────
 
-// ─── Types ───────────────────────────────────────────────────
 interface Language {
   name: string;
   langCode: string;
@@ -50,56 +44,89 @@ interface SpiritualProfile {
   studyInterests: string;
 }
 
-// ─── Defensive helpers ───────────────────────────────────────
-const safe = (s: unknown, fallback = ''): string =>
-  typeof s === 'string' && s.length > 0 ? s : fallback;
+// ─── Constants ───────────────────────────────────────────────────────────────
 
-const langBadge = (l: Partial<Language>): string => {
-  const src = safe(l.symbol) || safe(l.langCode) || safe(l.name) || '??';
-  return src.substring(0, 2).toUpperCase();
-};
-
-// ─── Constants ───────────────────────────────────────────────
 const FALLBACK_LANGUAGES: Language[] = [
-  { name: 'English',    langCode: 'E', symbol: 'en', direction: 'ltr' },
-  { name: 'Spanish',    langCode: 'S', symbol: 'es', direction: 'ltr' },
-  { name: 'French',     langCode: 'F', symbol: 'fr', direction: 'ltr' },
+  { name: 'English', langCode: 'E', symbol: 'en', direction: 'ltr' },
+  { name: 'Spanish', langCode: 'S', symbol: 'es', direction: 'ltr' },
+  { name: 'French', langCode: 'F', symbol: 'fr', direction: 'ltr' },
   { name: 'Portuguese', langCode: 'T', symbol: 'pt', direction: 'ltr' },
-  { name: 'German',     langCode: 'X', symbol: 'de', direction: 'ltr' },
-  { name: 'Italian',    langCode: 'I', symbol: 'it', direction: 'ltr' },
+  { name: 'German', langCode: 'X', symbol: 'de', direction: 'ltr' },
+  { name: 'Italian', langCode: 'I', symbol: 'it', direction: 'ltr' },
+  { name: 'Russian', langCode: 'U', symbol: 'ru', direction: 'ltr' },
+  { name: 'Japanese', langCode: 'J', symbol: 'ja', direction: 'ltr' },
+  { name: 'Korean', langCode: 'Ko', symbol: 'ko', direction: 'ltr' },
+  { name: 'Haitian Creole', langCode: 'CR', symbol: 'ht', direction: 'ltr' },
+  { name: 'Dutch', langCode: 'O', symbol: 'nl', direction: 'ltr' },
+  { name: 'Swedish', langCode: 'Z', symbol: 'sv', direction: 'ltr' },
+  { name: 'Polish', langCode: 'G', symbol: 'pl', direction: 'ltr' },
 ];
 
 const SPIRITUAL_STATUSES = [
-  'Publisher', 'Pioneer', 'Elder', 'Ministerial Servant', 'Bible Student',
-  'Interested', 'Returning', 'Other',
+  'Publisher',
+  'Baptized',
+  'Pioneer',
+  'Elder',
+  'Ministerial Servant',
+  'Bible Student',
+  'Interested Person',
 ];
-const AGE_RANGES = ['Under 18', '18–24', '25–34', '35–44', '45–54', '55–64', '65+'];
-const MARITAL_STATUSES = ['Single', 'Married', 'Widowed', 'Divorced', 'Prefer not to say'];
 
-// ─── Picker Row (reusable) ───────────────────────────────────
+const AGE_RANGES = [
+  'Under 18',
+  '18–25',
+  '26–35',
+  '36–50',
+  '51–65',
+  'Over 65',
+];
+
+const MARITAL_STATUSES = ['Single', 'Married', 'Widowed'];
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
+
+function StepDots({ current, total }: { current: number; total: number }) {
+  return (
+    <XStack gap="$2" justifyContent="center" marginTop="$3">
+      {Array.from({ length: total }).map((_, i) => (
+        <YStack
+          key={i}
+          width={i === current ? 24 : 8}
+          height={8}
+          borderRadius="$10"
+          backgroundColor={i === current ? '#5B7E6B' : '#3A3A3C'}
+        />
+      ))}
+    </XStack>
+  );
+}
+
 function PickerRow({
-  label, value, options, onSelect,
+  label,
+  value,
+  options,
+  onSelect,
 }: {
   label: string;
   value: string;
   options: string[];
   onSelect: (v: string) => void;
 }) {
-  const { t } = useTheme();
   const [open, setOpen] = useState(false);
+
   return (
     <YStack gap="$2">
-      <SizableText style={{ fontFamily: fonts.mono, fontSize: 10, color: t.inkSubtle, letterSpacing: 1.5, fontWeight: '700' }}>
+      <SizableText size="$3" color="#9CA3AF" fontWeight="600" letterSpacing={0.5}>
         {label.toUpperCase()}
       </SizableText>
       <TouchableOpacity
-        onPress={() => setOpen((o) => !o)}
-        activeOpacity={0.85}
+        activeOpacity={0.75}
+        onPress={() => setOpen((p) => !p)}
         style={{
-          backgroundColor: t.surface,
-          borderRadius: 14,
+          backgroundColor: '#2C2C2E',
+          borderRadius: 12,
           borderWidth: 1,
-          borderColor: open ? t.copperBorder : t.border,
+          borderColor: open ? '#5B7E6B' : '#3A3A3C',
           paddingHorizontal: 16,
           paddingVertical: 14,
           flexDirection: 'row',
@@ -107,299 +134,249 @@ function PickerRow({
           alignItems: 'center',
         }}
       >
-        <SizableText style={{ fontFamily: fonts.body, fontSize: 15, color: value ? t.ink : t.inkSubtle }}>
-          {value || 'Select…'}
+        <SizableText size="$4" color={value ? '#F2F2F7' : '#6B7280'}>
+          {value || `Select ${label}`}
         </SizableText>
-        <SizableText style={{ fontFamily: fonts.mono, fontSize: 11, color: t.copper }}>
-          {open ? '▴' : '▾'}
+        <SizableText size="$3" color="#5B7E6B">
+          {open ? '▲' : '▼'}
         </SizableText>
       </TouchableOpacity>
 
       {open && (
-        <Card backgroundColor={t.surface} borderRadius="$4" borderWidth={1} borderColor={t.border} overflow="hidden">
-          {options.map((opt, i) => {
-            const selected = opt === value;
-            return (
-              <TouchableOpacity
-                key={opt}
-                activeOpacity={0.7}
-                onPress={() => { onSelect(opt); setOpen(false); }}
-                style={{
-                  paddingHorizontal: 16, paddingVertical: 12,
-                  borderBottomWidth: i < options.length - 1 ? 1 : 0,
-                  borderBottomColor: t.border,
-                  backgroundColor: selected ? t.copperSoft : 'transparent',
-                  flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-                }}
+        <Card
+          backgroundColor="#2C2C2E"
+          borderRadius="$4"
+          borderWidth={1}
+          borderColor="#3A3A3C"
+          overflow="hidden"
+        >
+          {options.map((opt, idx) => (
+            <TouchableOpacity
+              key={opt}
+              activeOpacity={0.7}
+              onPress={() => {
+                onSelect(opt);
+                setOpen(false);
+              }}
+              style={{
+                paddingHorizontal: 16,
+                paddingVertical: 13,
+                backgroundColor:
+                  opt === value ? 'rgba(91,126,107,0.18)' : 'transparent',
+                borderBottomWidth: idx < options.length - 1 ? 1 : 0,
+                borderBottomColor: '#3A3A3C',
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <SizableText
+                size="$4"
+                color={opt === value ? '#5B7E6B' : '#E5E7EB'}
               >
-                <SizableText style={{ fontFamily: fonts.body, fontSize: 14, color: selected ? t.copper : t.ink, fontWeight: selected ? '700' : '400' }}>
-                  {opt}
+                {opt}
+              </SizableText>
+              {opt === value && (
+                <SizableText size="$4" color="#5B7E6B">
+                  ✓
                 </SizableText>
-                {selected && <Glyph char="✓" size={12} color={t.copper} />}
-              </TouchableOpacity>
-            );
-          })}
+              )}
+            </TouchableOpacity>
+          ))}
         </Card>
       )}
     </YStack>
   );
 }
 
-// ─── Hero gradient backdrop ──────────────────────────────────
-function CodexBackdrop() {
-  const { t, mode } = useTheme();
-  // copper warm top → parchment/bg mid → mossy bottom
-  const colors = mode === 'dark'
-    ? ['rgba(220,159,98,0.16)', 'rgba(14,18,36,0.0)', 'rgba(125,168,142,0.10)']
-    : ['rgba(184,117,60,0.20)', 'rgba(244,236,215,0.0)', 'rgba(74,107,87,0.14)'];
+// ─── Step 0: Ask for Name ────────────────────────────────────────────────
+function NameStep({ name, setName, onNext, t }: { name: string; setName: (n: string) => void; onNext: () => void; t: ReturnType<typeof createTranslator> }) {
   return (
-    <>
-      <LinearGradient
-        colors={colors as any}
-        locations={[0, 0.55, 1]}
-        style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
-        pointerEvents="none"
-      />
-      {/* corner glow */}
-      <View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          top: -120, left: -120, width: 360, height: 360, borderRadius: 180,
-          backgroundColor: mode === 'dark'
-            ? 'rgba(220,159,98,0.10)'
-            : 'rgba(184,117,60,0.10)',
-        }}
-      />
-      <View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          bottom: -140, right: -140, width: 420, height: 420, borderRadius: 210,
-          backgroundColor: mode === 'dark'
-            ? 'rgba(125,168,142,0.10)'
-            : 'rgba(74,107,87,0.08)',
-        }}
-      />
-    </>
-  );
-}
-
-// ─── Codex primary button ────────────────────────────────────
-function CodexButton({
-  label, onPress, disabled, variant = 'primary', icon, testID,
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  variant?: 'primary' | 'ghost' | 'secondary';
-  icon?: React.ReactNode;
-  testID?: string;
-}) {
-  const { t } = useTheme();
-  const bg =
-    disabled ? t.surfaceAlt :
-    variant === 'primary' ? t.ink :
-    variant === 'secondary' ? t.copper :
-    'transparent';
-  const fg =
-    disabled ? t.inkSubtle :
-    variant === 'ghost' ? t.copper :
-    t.inkInverse;
-  return (
-    <TouchableOpacity
-      data-testid={testID}
-      activeOpacity={0.85}
-      onPress={onPress}
-      disabled={disabled}
-      style={{
-        backgroundColor: bg,
-        paddingVertical: 16,
-        paddingHorizontal: 22,
-        borderRadius: 999,
-        flexDirection: 'row',
-        justifyContent: 'center',
-        alignItems: 'center',
-        gap: 10,
-        borderWidth: variant === 'ghost' ? 1 : 0,
-        borderColor: t.copperBorder,
-      }}
-    >
-      <SizableText style={{ fontFamily: fonts.mono, fontSize: 12, color: fg, fontWeight: '700', letterSpacing: 1.5, textTransform: 'uppercase' }}>
-        {label}
+    <YStack flex={1} justifyContent="center" alignItems="center" gap="$5" padding="$6">
+      <H1 color="#5B7E6B">{t('welcome')}</H1>
+      <SizableText size="$4" color="#9CA3AF" textAlign="center">
+        {t('what_is_your_name')}
       </SizableText>
-      {icon}
-    </TouchableOpacity>
+      <Input
+        value={name}
+        onChangeText={setName}
+        placeholder={t('enter_your_name')}
+        autoFocus
+        size="$4"
+        width={240}
+        maxLength={32}
+      />
+      <Button
+        backgroundColor="#5B7E6B"
+        color="#fff"
+        borderRadius={10}
+        size="$4"
+        disabled={!name.trim()}
+        onPress={onNext}
+      >
+        {t('continue')}
+      </Button>
+    </YStack>
   );
 }
 
-// ─── Step dots ───────────────────────────────────────────────
-function StepDots({ current, total }: { current: number; total: number }) {
-  const { t } = useTheme();
-  return (
-    <XStack gap="$2" alignItems="center">
-      {Array.from({ length: total }).map((_, i) => {
-        const active = i === current;
-        const done = i < current;
-        return (
-          <View
-            key={i}
-            style={{
-              width: active ? 22 : 6,
-              height: 6,
-              borderRadius: 3,
-              backgroundColor: active ? t.copper : done ? t.moss : t.border,
-            }}
-          />
-        );
-      })}
-    </XStack>
-  );
-}
+// ─── Step 1: Welcome ─────────────────────────────────────────────────────────
 
-// ═════════════════════════════════════════════════════════════
-// Step 1 — Welcome
-// ═════════════════════════════════════════════════════════════
-function WelcomeStep({ onNext }: { onNext: () => void }) {
-  const { t } = useTheme();
+function WelcomeStep({ onNext, t }: { onNext: () => void; t: ReturnType<typeof createTranslator> }) {
   return (
     <YStack flex={1} justifyContent="space-between" padding="$6">
-      <YStack flex={1} justifyContent="center" alignItems="flex-start" gap="$5">
-        {/* Masthead chip */}
-        <XStack alignItems="center" gap="$3">
-          <View style={{ width: 2, height: 24, backgroundColor: t.copper }} />
-          <SizableText style={{ fontFamily: fonts.mono, fontSize: 10, color: t.inkSubtle, letterSpacing: 2.5, fontWeight: '700' }}>
-            JW · CODEX · VOL. I
-          </SizableText>
-        </XStack>
+      {/* Top glow */}
+      <YStack
+        position="absolute"
+        top={-80}
+        left={-80}
+        width={320}
+        height={320}
+        borderRadius={160}
+        backgroundColor="rgba(91,126,107,0.08)"
+      />
 
-        {/* Editorial headline */}
-        <YStack gap="$2">
-          <SizableText
-            style={{
-              fontFamily: fonts.display,
-              fontSize: 56,
-              lineHeight: 60,
-              color: t.ink,
-              fontWeight: '500',
-              letterSpacing: -1.5,
-              fontStyle: 'italic',
-            }}
-          >
-            A quieter{'\n'}way to study.
-          </SizableText>
-          <SizableText
-            style={{
-              fontFamily: fonts.body,
-              fontSize: 16,
-              color: t.inkMuted,
-              lineHeight: 24,
-              marginTop: 8,
-              maxWidth: 380,
-            }}
-          >
-            Your daily text, meetings, ministry, and saved sources — all woven into a single, devotional companion drawn from JW.org and WOL.
+      <YStack flex={1} justifyContent="center" alignItems="center" gap="$5">
+        {/* Icon badge */}
+        <YStack
+          width={110}
+          height={110}
+          borderRadius={55}
+          backgroundColor="rgba(91,126,107,0.15)"
+          justifyContent="center"
+          alignItems="center"
+          borderWidth={1.5}
+          borderColor="rgba(91,126,107,0.35)"
+        >
+          <SizableText size="$10" style={{ fontSize: 52 }}>
+            📖
           </SizableText>
         </YStack>
 
-        {/* Feature chips with real icons */}
-        <YStack gap="$2" marginTop="$3">
-          <SizableText style={{ fontFamily: fonts.mono, fontSize: 10, letterSpacing: 2, color: t.copper, fontWeight: '700' }}>
-            ◆  WHAT'S INSIDE
+        <YStack alignItems="center" gap="$3">
+          <SizableText
+            size="$2"
+            color="#5B7E6B"
+            fontWeight="700"
+            letterSpacing={2.5}
+            textAlign="center"
+          >
+            {t('welcome_to').toUpperCase()}
           </SizableText>
-          <XStack gap="$2" flexWrap="wrap">
-            {[
-              { char: '✦', label: 'Study tools' },
-              { char: '◆', label: 'Meeting prep' },
-              { char: '◇', label: 'Field ministry' },
-              { char: '✧', label: 'Saved library' },
-            ].map((f) => (
-              <XStack
-                key={f.label}
-                backgroundColor={t.surface}
+          <H1
+            color="#F2F2F7"
+            fontWeight="800"
+            textAlign="center"
+            lineHeight={40}
+            style={{ fontSize: 32 }}
+          >
+            JW Study{'\n'}Assistant
+          </H1>
+          <Paragraph
+            size="$4"
+            color="#9CA3AF"
+            textAlign="center"
+            lineHeight={22}
+            maxWidth={300}
+            marginTop="$1"
+          >
+            {t('onboarding_intro')}
+          </Paragraph>
+        </YStack>
+
+        {/* Feature pills */}
+        <XStack gap="$2" flexWrap="wrap" justifyContent="center" marginTop="$2">
+          {[t('study_tools'), t('meeting_prep'), t('ministry'), t('saved_items')].map(
+            (feat) => (
+              <YStack
+                key={feat}
+                backgroundColor="#2C2C2E"
                 paddingHorizontal="$3"
                 paddingVertical="$2"
-                borderRadius={999}
+                borderRadius="$10"
                 borderWidth={1}
-                borderColor={t.border}
-                alignItems="center"
-                gap="$2"
+                borderColor="#3A3A3C"
               >
-                <Glyph char={f.char} size={12} color={t.copper} />
-                <SizableText style={{ fontFamily: fonts.body, fontSize: 12, color: t.ink, fontWeight: '500' }}>
-                  {f.label}
+                <SizableText size="$2" color="#D1D5DB">
+                  {feat}
                 </SizableText>
-              </XStack>
-            ))}
-          </XStack>
-        </YStack>
+              </YStack>
+            )
+          )}
+        </XStack>
       </YStack>
 
       <YStack gap="$4">
         {/* Disclaimer */}
-        <XStack
-          backgroundColor={t.surface}
-          borderRadius="$4"
+        <YStack
+          backgroundColor="#2C2C2E"
+          borderRadius="$3"
           padding="$3"
-          gap="$2"
-          alignItems="flex-start"
           borderLeftWidth={3}
-          borderLeftColor={t.moss}
-          borderTopWidth={1}
-          borderRightWidth={1}
-          borderBottomWidth={1}
-          borderColor={t.border}
+          borderLeftColor="#5B7E6B"
         >
-          <Glyph char="✕" size={12} color={t.moss} />
-          <SizableText style={{ fontFamily: fonts.body, fontSize: 11, color: t.inkMuted, lineHeight: 16, flex: 1 }}>
-            Not affiliated with or endorsed by Jehovah's Witnesses, JW.org, JW Library, or Watch Tower Bible and Tract Society. Organizes study from publicly available JW.org / WOL content.
+          <SizableText size="$2" color="#6B7280" lineHeight={18}>
+            {t('short_disclaimer')}
           </SizableText>
-        </XStack>
+        </YStack>
 
-        <CodexButton
-          label="Begin"
-          icon={<Glyph char="→" size={14} color={t.inkInverse} />}
+        <Button
+          backgroundColor="#5B7E6B"
+          color="white"
+          size="$5"
+          borderRadius="$4"
+          fontWeight="700"
+          pressStyle={{ opacity: 0.85, scale: 0.98 }}
           onPress={onNext}
-          testID="onboarding-begin-btn"
-        />
+        >
+          {t('get_started')}
+        </Button>
       </YStack>
     </YStack>
   );
 }
 
-// ═════════════════════════════════════════════════════════════
-// Step 2 — Language
-// ═════════════════════════════════════════════════════════════
+// ─── Step 2: Language ─────────────────────────────────────────────────────────
+
 function LanguageStep({
-  onNext, selectedLanguage, onSelectLanguage,
+  onNext,
+  selectedLanguage,
+  onSelectLanguage,
+  t,
 }: {
   onNext: () => void;
   selectedLanguage: Language | null;
   onSelectLanguage: (lang: Language) => void;
+  t: ReturnType<typeof createTranslator>;
 }) {
-  const { t } = useTheme();
   const [languages, setLanguages] = useState<Language[]>([]);
   const [filtered, setFiltered] = useState<Language[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
+  const normalizeApiLanguage = (l: any): Language | null => {
+    const langCode = String(l?.langCode ?? l?.langcode ?? l?.code ?? '').trim();
+    const symbol = String(l?.symbol ?? l?.locale ?? l?.localeCode ?? '').trim().toLowerCase();
+    const name = String(l?.name ?? l?.vernacularName ?? l?.englishName ?? langCode ?? symbol ?? '').trim();
+    if (!name || (!langCode && !symbol)) return null;
+    return {
+      name,
+      langCode: langCode || symbol.toUpperCase(),
+      symbol: symbol || langCode.toLowerCase(),
+      direction: l?.direction === 'rtl' ? 'rtl' : 'ltr',
+    };
+  };
+
   useEffect(() => {
     fetch('https://b.jw-cdn.org/apis/mediator/v1/languages/E/web?clientType=www')
       .then((r) => r.json())
       .then((data) => {
-        const langs: Language[] = (data?.languages ?? [])
-          .map((l: any): Language => ({
-            name: safe(l?.name) || safe(l?.vernacularName) || safe(l?.langCode, 'Unknown'),
-            langCode: safe(l?.langCode),
-            symbol: safe(l?.symbol),
-            direction: safe(l?.direction, 'ltr'),
-          }))
-          // Skip entries without enough info to render
-          .filter((l: Language) => l.name && (l.langCode || l.symbol));
+        const langs: Language[] = (data.languages || [])
+          .map(normalizeApiLanguage)
+          .filter(Boolean) as Language[];
         const sorted = langs.sort((a, b) => a.name.localeCompare(b.name));
-        const list = sorted.length > 0 ? sorted : FALLBACK_LANGUAGES;
-        setLanguages(list);
-        setFiltered(list);
+        setLanguages(sorted);
+        setFiltered(sorted);
       })
       .catch(() => {
         setLanguages(FALLBACK_LANGUAGES);
@@ -409,18 +386,24 @@ function LanguageStep({
   }, []);
 
   useEffect(() => {
-    if (!query.trim()) setFiltered(languages);
-    else {
-      const q = query.toLowerCase();
-      setFiltered(languages.filter((l) => safe(l.name).toLowerCase().includes(q)));
+    if (!query.trim()) {
+      setFiltered(languages);
+    } else {
+      setFiltered(
+        languages.filter((l) =>
+          l.name.toLowerCase().includes(query.toLowerCase())
+        )
+      );
     }
   }, [query, languages]);
 
   const renderItem = ({ item }: { item: Language }) => {
+    const badge = String(item.symbol || item.langCode || item.name || '??')
+      .slice(0, 2)
+      .toUpperCase();
     const isSelected =
-      !!selectedLanguage &&
-      safe(selectedLanguage.langCode) === safe(item.langCode) &&
-      safe(selectedLanguage.symbol) === safe(item.symbol);
+      selectedLanguage?.langCode === item.langCode ||
+      selectedLanguage?.symbol === item.symbol;
     return (
       <TouchableOpacity
         activeOpacity={0.7}
@@ -429,41 +412,53 @@ function LanguageStep({
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
-          paddingHorizontal: 18,
+          paddingHorizontal: 16,
           paddingVertical: 14,
-          backgroundColor: isSelected ? t.copperSoft : 'transparent',
+          backgroundColor: isSelected
+            ? 'rgba(91,126,107,0.14)'
+            : 'transparent',
           borderBottomWidth: 1,
-          borderBottomColor: t.border,
+          borderBottomColor: '#2C2C2E',
         }}
       >
-        <XStack alignItems="center" gap="$3" flex={1}>
-          <View
-            style={{
-              width: 40, height: 40, borderRadius: 20,
-              backgroundColor: isSelected ? t.copper : t.surface,
-              justifyContent: 'center', alignItems: 'center',
-              borderWidth: 1,
-              borderColor: isSelected ? t.copper : t.border,
-            }}
+        <XStack alignItems="center" gap="$3">
+          <YStack
+            width={36}
+            height={36}
+            borderRadius={18}
+            backgroundColor={isSelected ? '#5B7E6B' : '#2C2C2E'}
+            justifyContent="center"
+            alignItems="center"
           >
-            <SizableText style={{ fontFamily: fonts.mono, fontSize: 11, color: isSelected ? t.inkInverse : t.inkMuted, fontWeight: '800', letterSpacing: 1 }}>
-              {langBadge(item)}
+            <SizableText
+              size="$2"
+              color={isSelected ? 'white' : '#9CA3AF'}
+              fontWeight="700"
+            >
+              {badge}
             </SizableText>
-          </View>
-          <SizableText style={{ fontFamily: fonts.display, fontSize: 16, color: isSelected ? t.copper : t.ink, fontWeight: isSelected ? '700' : '500' }}>
-            {safe(item.name, 'Unknown')}
+          </YStack>
+          <SizableText
+            size="$4"
+            color={isSelected ? '#5B7E6B' : '#E5E7EB'}
+            fontWeight={isSelected ? '600' : '400'}
+          >
+            {item.name}
           </SizableText>
         </XStack>
         {isSelected && (
-          <View
-            style={{
-              width: 26, height: 26, borderRadius: 13,
-              backgroundColor: t.copper,
-              justifyContent: 'center', alignItems: 'center',
-            }}
+          <YStack
+            width={24}
+            height={24}
+            borderRadius={12}
+            backgroundColor="#5B7E6B"
+            justifyContent="center"
+            alignItems="center"
           >
-            <Glyph char="✓" size={13} color={t.inkInverse} />
-          </View>
+            <SizableText size="$2" color="white">
+              ✓
+            </SizableText>
+          </YStack>
         )}
       </TouchableOpacity>
     );
@@ -472,72 +467,80 @@ function LanguageStep({
   return (
     <YStack flex={1}>
       <YStack padding="$6" gap="$4" paddingBottom="$3">
-        <XStack alignItems="center" gap="$2">
-          <View style={{ width: 20, height: 1, backgroundColor: t.copper }} />
-          <SizableText style={{ fontFamily: fonts.mono, fontSize: 10, color: t.copper, letterSpacing: 2, fontWeight: '700' }}>
-            II · LANGUAGE
+        <YStack gap="$1">
+          <SizableText
+            size="$2"
+            color="#5B7E6B"
+            fontWeight="700"
+            letterSpacing={2}
+          >
+            {t('step_of_total', { step: 2, total: 4 })}
           </SizableText>
-        </XStack>
-        <SizableText style={{ fontFamily: fonts.display, fontSize: 36, lineHeight: 40, color: t.ink, fontWeight: '500', letterSpacing: -1, fontStyle: 'italic' }}>
-          In which tongue?
-        </SizableText>
-        <SizableText style={{ fontFamily: fonts.body, fontSize: 14, color: t.inkMuted, lineHeight: 21 }}>
-          Choose the language for study materials. You can change this later.
-        </SizableText>
+          <H2 color="#F2F2F7" fontWeight="800" style={{ fontSize: 26 }}>
+            {t('choose_your_language')}
+          </H2>
+          <Paragraph size="$3" color="#9CA3AF">
+            {t('select_language_study_materials')}
+          </Paragraph>
+        </YStack>
 
-        {/* Search */}
-        <XStack
-          backgroundColor={t.surface}
-          borderRadius={999}
+        <YStack
+          backgroundColor="#2C2C2E"
+          borderRadius="$4"
           borderWidth={1}
-          borderColor={t.border}
-          paddingHorizontal="$3"
-          paddingVertical={4}
+          borderColor="#3A3A3C"
+          flexDirection="row"
           alignItems="center"
+          paddingHorizontal="$3"
           gap="$2"
         >
-          <Glyph char="⌕" size={16} color={t.inkSubtle} />
+          <SizableText size="$4" color="#6B7280">
+            🔍
+          </SizableText>
           <Input
             flex={1}
             value={query}
             onChangeText={setQuery}
-            placeholder="Search languages…"
-            placeholderTextColor={t.inkSubtle}
-            color={t.ink}
+            placeholder={t('search_languages')}
+            placeholderTextColor="#6B7280"
+            color="#F2F2F7"
             backgroundColor="transparent"
             borderWidth={0}
             size="$4"
-            focusStyle={{ borderWidth: 0, outlineWidth: 0 } as any}
-            style={{ fontFamily: fonts.body }}
+            focusStyle={{ borderWidth: 0, outlineWidth: 0 }}
           />
           {query.length > 0 && (
             <TouchableOpacity onPress={() => setQuery('')}>
-              <SizableText style={{ fontFamily: fonts.mono, fontSize: 14, color: t.inkSubtle }}>✕</SizableText>
+              <SizableText size="$3" color="#6B7280">
+                ✕
+              </SizableText>
             </TouchableOpacity>
           )}
-        </XStack>
+        </YStack>
       </YStack>
 
       {loading ? (
         <YStack flex={1} justifyContent="center" alignItems="center" gap="$3">
-          <Spinner size="large" color={t.copper} />
-          <SizableText style={{ fontFamily: fonts.body, fontSize: 13, color: t.inkMuted }}>
-            Loading languages…
+          <Spinner size="large" color="#5B7E6B" />
+          <SizableText size="$3" color="#9CA3AF">
+            {t('loading_languages')}
           </SizableText>
         </YStack>
       ) : (
         <FlatList
           data={filtered}
-          keyExtractor={(item, i) => `${safe(item.langCode)}-${safe(item.symbol)}-${i}`}
+          keyExtractor={(item, index) => `${item.langCode || item.symbol || item.name}-${index}`}
           renderItem={renderItem}
           style={{ flex: 1 }}
           contentContainerStyle={{ paddingBottom: 16 }}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <YStack padding="$6" alignItems="center" gap="$2">
-              <Glyph char="🌐" size={24} color={t.inkSubtle} />
-              <SizableText style={{ fontFamily: fonts.body, fontSize: 13, color: t.inkMuted, textAlign: 'center' }}>
-                No languages match "{query}"
+              <SizableText size="$5" color="#6B7280">
+                🌐
+              </SizableText>
+              <SizableText size="$4" color="#9CA3AF" textAlign="center">
+                {t('no_languages_match', { query })}
               </SizableText>
             </YStack>
           }
@@ -547,131 +550,160 @@ function LanguageStep({
       <YStack
         padding="$5"
         borderTopWidth={1}
-        borderTopColor={t.border}
-        backgroundColor={t.bg}
+        borderTopColor="#2C2C2E"
+        backgroundColor="#1C1C1E"
       >
-        <CodexButton
-          label={selectedLanguage ? `Continue with ${selectedLanguage.name}` : 'Select a language'}
-          icon={selectedLanguage ? <Glyph char="→" size={14} color={t.inkInverse} /> : undefined}
+        <Button
+          backgroundColor={selectedLanguage ? '#5B7E6B' : '#3A3A3C'}
+          color={selectedLanguage ? 'white' : '#6B7280'}
+          size="$5"
+          borderRadius="$4"
+          fontWeight="700"
+          pressStyle={{ opacity: 0.85, scale: 0.98 }}
           disabled={!selectedLanguage}
           onPress={onNext}
-          testID="lang-continue-btn"
-        />
+        >
+          {selectedLanguage
+            ? t('continue_with_language', { language: selectedLanguage.name })
+            : t('select_language_to_continue')}
+        </Button>
       </YStack>
     </YStack>
   );
 }
 
-// ═════════════════════════════════════════════════════════════
-// Step 3 — Spiritual Profile
-// ═════════════════════════════════════════════════════════════
+// ─── Step 3: Spiritual Profile ────────────────────────────────────────────────
+
 function ProfileStep({
-  onNext, profile, onUpdateProfile,
+  onNext,
+  profile,
+  onUpdateProfile,
+  t,
 }: {
   onNext: () => void;
   profile: SpiritualProfile;
   onUpdateProfile: (updates: Partial<SpiritualProfile>) => void;
+  t: ReturnType<typeof createTranslator>;
 }) {
-  const { t } = useTheme();
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
       <ScrollView flex={1} showsVerticalScrollIndicator={false}>
         <YStack padding="$6" gap="$5" paddingBottom="$8">
-          <YStack gap="$2">
-            <XStack alignItems="center" gap="$2">
-              <View style={{ width: 20, height: 1, backgroundColor: t.copper }} />
-              <SizableText style={{ fontFamily: fonts.mono, fontSize: 10, color: t.copper, letterSpacing: 2, fontWeight: '700' }}>
-                III · YOUR PROFILE
-              </SizableText>
-            </XStack>
-            <SizableText style={{ fontFamily: fonts.display, fontSize: 36, lineHeight: 40, color: t.ink, fontWeight: '500', letterSpacing: -1, fontStyle: 'italic' }}>
-              A little about{'\n'}your study.
+          <YStack gap="$1">
+            <SizableText
+              size="$2"
+              color="#5B7E6B"
+              fontWeight="700"
+              letterSpacing={2}
+            >
+              {t('step_of_total', { step: 3, total: 4 })}
             </SizableText>
-            <Paragraph style={{ fontFamily: fonts.body, fontSize: 14, color: t.inkMuted, lineHeight: 21 }}>
-              Helps personalize suggestions. All fields optional.
+            <H2 color="#F2F2F7" fontWeight="800" style={{ fontSize: 26 }}>
+              {t('your_spiritual_profile')}
+            </H2>
+            <Paragraph size="$3" color="#9CA3AF" lineHeight={20}>
+              {t('spiritual_profile_hint')}
             </Paragraph>
           </YStack>
 
-          {/* Privacy badge */}
+          {/* Status badge */}
           <XStack
-            backgroundColor={t.mossSoft}
-            borderRadius="$4"
+            backgroundColor="rgba(91,126,107,0.1)"
+            borderRadius="$3"
             padding="$3"
             gap="$2"
             alignItems="center"
             borderWidth={1}
-            borderColor={t.mossBorder}
+            borderColor="rgba(91,126,107,0.2)"
           >
-            <Glyph char="●" size={11} color={t.moss} />
-            <SizableText style={{ fontFamily: fonts.body, fontSize: 12, color: t.inkMuted, flex: 1, lineHeight: 17 }}>
-              Information stays on your device. Used only to tailor suggestions.
+            <SizableText size="$3" color="#5B7E6B">
+              🔒
             </SizableText>
+            <Paragraph size="$2" color="#9CA3AF" flex={1} lineHeight={17}>
+              {t('profile_privacy_hint')}
+            </Paragraph>
           </XStack>
 
           <YStack gap="$5">
             <PickerRow
-              label="Spiritual Status"
+              label={t('spiritual_status')}
               value={profile.spiritualStatus}
               options={SPIRITUAL_STATUSES}
               onSelect={(v) => onUpdateProfile({ spiritualStatus: v })}
             />
+
             <PickerRow
-              label="Age Range"
+              label={t('age_range')}
               value={profile.ageRange}
               options={AGE_RANGES}
               onSelect={(v) => onUpdateProfile({ ageRange: v })}
             />
+
             <PickerRow
-              label="Marital Status"
+              label={t('marital_status')}
               value={profile.maritalStatus}
               options={MARITAL_STATUSES}
               onSelect={(v) => onUpdateProfile({ maritalStatus: v })}
             />
 
             <YStack gap="$2">
-              <SizableText style={{ fontFamily: fonts.mono, fontSize: 10, color: t.inkSubtle, letterSpacing: 1.5, fontWeight: '700' }}>
-                STUDY INTERESTS
+              <SizableText
+                size="$3"
+                color="#9CA3AF"
+                fontWeight="600"
+                letterSpacing={0.5}
+              >
+                {t('study_interests').toUpperCase()}
               </SizableText>
               <YStack
-                backgroundColor={t.surface}
+                backgroundColor="#2C2C2E"
                 borderRadius="$4"
                 borderWidth={1}
-                borderColor={t.border}
+                borderColor="#3A3A3C"
                 padding="$1"
               >
                 <Input
                   value={profile.studyInterests}
                   onChangeText={(v) => onUpdateProfile({ studyInterests: v })}
-                  placeholder="e.g. prophecy, family worship, young people…"
-                  placeholderTextColor={t.inkSubtle}
-                  color={t.ink}
+                  placeholder={t('study_interests_placeholder')}
+                  placeholderTextColor="#6B7280"
+                  color="#F2F2F7"
                   backgroundColor="transparent"
                   borderWidth={0}
                   size="$4"
                   multiline
                   numberOfLines={3}
                   textAlignVertical="top"
-                  focusStyle={{ borderWidth: 0, outlineWidth: 0 } as any}
-                  style={{ minHeight: 80, paddingTop: 10, fontFamily: fonts.body }}
+                  focusStyle={{ borderWidth: 0, outlineWidth: 0 }}
+                  style={{ minHeight: 80, paddingTop: 10 }}
                 />
               </YStack>
-              <SizableText style={{ fontFamily: fonts.body, fontSize: 11, color: t.inkSubtle, fontStyle: 'italic' }}>
-                Separate topics with commas
+              <SizableText size="$2" color="#6B7280">
+                {t('separate_topics_commas')}
               </SizableText>
             </YStack>
           </YStack>
 
-          <CodexButton
-            label="Continue"
-            icon={<Glyph char="→" size={14} color={t.inkInverse} />}
+          <Button
+            backgroundColor="#5B7E6B"
+            color="white"
+            size="$5"
+            borderRadius="$4"
+            fontWeight="700"
+            marginTop="$2"
+            pressStyle={{ opacity: 0.85, scale: 0.98 }}
             onPress={onNext}
-            testID="profile-continue-btn"
-          />
+          >
+            {t('continue')}
+          </Button>
 
-          <YStack alignItems="center" paddingTop="$1">
+          <YStack alignItems="center">
             <TouchableOpacity onPress={onNext}>
-              <SizableText style={{ fontFamily: fonts.mono, fontSize: 11, color: t.inkSubtle, letterSpacing: 1.5, fontWeight: '700' }}>
-                SKIP FOR NOW
+              <SizableText size="$3" color="#6B7280">
+                {t('skip_for_now')}
               </SizableText>
             </TouchableOpacity>
           </YStack>
@@ -681,243 +713,297 @@ function ProfileStep({
   );
 }
 
-// ═════════════════════════════════════════════════════════════
-// Step 4 — Complete
-// ═════════════════════════════════════════════════════════════
+// ─── Step 4: Complete ─────────────────────────────────────────────────────────
+
 function CompleteStep({
-  onStart, selectedLanguage,
+  onStart,
+  selectedLanguage,
+  t,
 }: {
   onStart: () => void;
   selectedLanguage: Language | null;
+  t: ReturnType<typeof createTranslator>;
 }) {
-  const { t } = useTheme();
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     Animated.loop(
       Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.08, duration: 1000, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1,    duration: 1000, useNativeDriver: true }),
-      ]),
+        Animated.timing(pulseAnim, {
+          toValue: 1.08,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
     ).start();
   }, []);
 
   return (
     <YStack flex={1} justifyContent="space-between" padding="$6">
       <YStack flex={1} justifyContent="center" alignItems="center" gap="$6">
-        {/* Stamped seal */}
+        {/* Animated check circle */}
         <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-          <View
-            style={{
-              width: 132, height: 132, borderRadius: 66,
-              backgroundColor: t.copperSoft,
-              justifyContent: 'center', alignItems: 'center',
-              borderWidth: 1.5, borderColor: t.copperBorder,
-            }}
+          <YStack
+            width={120}
+            height={120}
+            borderRadius={60}
+            backgroundColor="rgba(91,126,107,0.2)"
+            justifyContent="center"
+            alignItems="center"
+            borderWidth={2}
+            borderColor="#5B7E6B"
           >
-            <View
-              style={{
-                width: 92, height: 92, borderRadius: 46,
-                backgroundColor: t.copper,
-                justifyContent: 'center', alignItems: 'center',
-              }}
+            <YStack
+              width={80}
+              height={80}
+              borderRadius={40}
+              backgroundColor="#5B7E6B"
+              justifyContent="center"
+              alignItems="center"
             >
-              <Glyph char="✦" size={38} color={t.inkInverse} />
-            </View>
-          </View>
+              <SizableText size="$8" color="white" fontWeight="800">
+                ✓
+              </SizableText>
+            </YStack>
+          </YStack>
         </Animated.View>
 
         <YStack alignItems="center" gap="$3">
-          <XStack alignItems="center" gap="$2">
-            <View style={{ width: 14, height: 1, backgroundColor: t.copper }} />
-            <SizableText style={{ fontFamily: fonts.mono, fontSize: 10, color: t.copper, letterSpacing: 2.5, fontWeight: '700' }}>
-              IV · READY
-            </SizableText>
-            <View style={{ width: 14, height: 1, backgroundColor: t.copper }} />
-          </XStack>
           <SizableText
-            style={{
-              fontFamily: fonts.display,
-              fontSize: 38,
-              lineHeight: 42,
-              color: t.ink,
-              fontWeight: '500',
-              textAlign: 'center',
-              letterSpacing: -1,
-              fontStyle: 'italic',
-            }}
+            size="$2"
+            color="#5B7E6B"
+            fontWeight="700"
+            letterSpacing={2.5}
           >
-            Your codex{'\n'}awaits.
+            {t('all_set').toUpperCase()}
           </SizableText>
-          <SizableText style={{ fontFamily: fonts.body, fontSize: 14, color: t.inkMuted, textAlign: 'center', lineHeight: 22, maxWidth: 320 }}>
-            Open the daily text, meetings, ministry log, and saved library — all from one quiet place.
-          </SizableText>
+          <H1
+            color="#F2F2F7"
+            fontWeight="800"
+            textAlign="center"
+            style={{ fontSize: 30 }}
+          >
+            {t('ready_to_study')}
+          </H1>
+          <Paragraph
+            size="$4"
+            color="#9CA3AF"
+            textAlign="center"
+            lineHeight={22}
+            maxWidth={280}
+          >
+            {t('ready_to_study_hint')}
+          </Paragraph>
         </YStack>
 
         {/* Summary cards */}
-        <YStack gap="$2" width="100%" maxWidth={360}>
+        <YStack gap="$2" width="100%" maxWidth={320}>
           {selectedLanguage && (
             <XStack
-              backgroundColor={t.surface}
-              borderRadius="$4"
+              backgroundColor="#2C2C2E"
+              borderRadius="$3"
               padding="$3"
               gap="$3"
               alignItems="center"
               borderWidth={1}
-              borderColor={t.border}
+              borderColor="#3A3A3C"
             >
-              <View
-                style={{
-                  width: 38, height: 38, borderRadius: 19,
-                  backgroundColor: t.copperSoft,
-                  borderWidth: 1, borderColor: t.copperBorder,
-                  justifyContent: 'center', alignItems: 'center',
-                }}
-              >
-                <SizableText style={{ fontFamily: fonts.mono, fontSize: 11, color: t.copper, fontWeight: '800', letterSpacing: 1 }}>
-                  {langBadge(selectedLanguage)}
-                </SizableText>
-              </View>
+              <SizableText size="$5">🌐</SizableText>
               <YStack flex={1}>
-                <SizableText style={{ fontFamily: fonts.mono, fontSize: 10, color: t.inkSubtle, letterSpacing: 1.5, fontWeight: '700' }}>
-                  STUDY LANGUAGE
+                <SizableText size="$2" color="#9CA3AF">
+                  {t('study_language')}
                 </SizableText>
-                <SizableText style={{ fontFamily: fonts.display, fontSize: 16, color: t.ink, fontWeight: '600' }}>
-                  {safe(selectedLanguage.name, 'English')}
+                <SizableText size="$4" color="#F2F2F7" fontWeight="600">
+                  {selectedLanguage.name}
                 </SizableText>
               </YStack>
-              <Glyph char="✓" size={14} color={t.moss} />
+              <SizableText size="$3" color="#5B7E6B">
+                ✓
+              </SizableText>
             </XStack>
           )}
           <XStack
-            backgroundColor={t.surface}
-            borderRadius="$4"
+            backgroundColor="#2C2C2E"
+            borderRadius="$3"
             padding="$3"
             gap="$3"
             alignItems="center"
             borderWidth={1}
-            borderColor={t.border}
+            borderColor="#3A3A3C"
           >
-            <View
-              style={{
-                width: 38, height: 38, borderRadius: 19,
-                backgroundColor: t.mossSoft,
-                borderWidth: 1, borderColor: t.mossBorder,
-                justifyContent: 'center', alignItems: 'center',
-              }}
-            >
-              <Glyph char="●" size={12} color={t.moss} />
-            </View>
+            <SizableText size="$5">🔒</SizableText>
             <YStack flex={1}>
-              <SizableText style={{ fontFamily: fonts.mono, fontSize: 10, color: t.inkSubtle, letterSpacing: 1.5, fontWeight: '700' }}>
-                PRIVACY
+              <SizableText size="$2" color="#9CA3AF">
+                {t('privacy')}
               </SizableText>
-              <SizableText style={{ fontFamily: fonts.display, fontSize: 16, color: t.ink, fontWeight: '600' }}>
-                Stored on device only
+              <SizableText size="$4" color="#F2F2F7" fontWeight="600">
+                {t('all_data_on_device')}
               </SizableText>
             </YStack>
-            <Glyph char="✓" size={14} color={t.moss} />
+            <SizableText size="$3" color="#5B7E6B">
+              ✓
+            </SizableText>
           </XStack>
         </YStack>
       </YStack>
 
-      <CodexButton
-        label="Open the Codex"
-        icon={<Glyph char="→" size={14} color={t.inkInverse} />}
+      <Button
+        backgroundColor="#5B7E6B"
+        color="white"
+        size="$5"
+        borderRadius="$4"
+        fontWeight="700"
+        pressStyle={{ opacity: 0.85, scale: 0.98 }}
         onPress={onStart}
-        testID="onboarding-finish-btn"
-      />
+      >
+        {t('start_app')}
+      </Button>
     </YStack>
   );
 }
 
-// ═════════════════════════════════════════════════════════════
-// Main onboarding screen
-// ═════════════════════════════════════════════════════════════
+// ─── Main Onboarding Screen ───────────────────────────────────────────────────
+
 export default function OnboardingScreen() {
   const router = useRouter();
-  const { t } = useTheme();
+  const setLanguage = useAppStore((s) => s.setLanguage);
+  const setAppLanguage = useAppStore((s) => s.setAppLanguage);
+  const setContentLanguage = useAppStore((s) => s.setContentLanguage);
   const [step, setStep] = useState(0);
+  const [name, setName] = useState('');
   const [selectedLanguage, setSelectedLanguage] = useState<Language | null>(null);
   const [profile, setProfile] = useState<SpiritualProfile>({
-    spiritualStatus: '', ageRange: '', maritalStatus: '', studyInterests: '',
+    spiritualStatus: '',
+    ageRange: '',
+    maritalStatus: '',
+    studyInterests: '',
   });
-  const TOTAL_STEPS = 4;
+  const t = createTranslator(selectedLanguage?.symbol || 'en');
 
-  const updateProfile = (updates: Partial<SpiritualProfile>) =>
+  const TOTAL_STEPS = 5;
+
+  const updateProfile = (updates: Partial<SpiritualProfile>) => {
     setProfile((prev) => ({ ...prev, ...updates }));
+  };
 
   const handleComplete = async () => {
+    const knownLanguage = selectedLanguage ? getLanguageBySymbol(selectedLanguage.symbol) : undefined;
+    const contentLanguage: AppLanguage = selectedLanguage
+      ? {
+          ...(knownLanguage ?? DISPLAY_LANGUAGES[0]),
+          code: knownLanguage?.code ?? selectedLanguage.langCode,
+          symbol: knownLanguage?.symbol ?? selectedLanguage.symbol,
+          name: knownLanguage?.name ?? selectedLanguage.name,
+          englishName: knownLanguage?.englishName ?? selectedLanguage.name,
+          direction: selectedLanguage.direction === 'rtl' ? 'rtl' : 'ltr',
+        }
+      : DISPLAY_LANGUAGES[0];
+    const displayLanguage = DISPLAY_LANGUAGES.find((lang) => lang.symbol === contentLanguage.symbol) ?? DISPLAY_LANGUAGES[0];
+
     try {
+      setAppLanguage(displayLanguage);
+      setContentLanguage(contentLanguage);
+      setLanguage(contentLanguage);
+      await saveLanguagePair(displayLanguage, contentLanguage);
       await Promise.all([
-        AsyncStorage.setItem('selected_language', JSON.stringify(selectedLanguage)),
+        AsyncStorage.setItem(
+          'selected_language',
+          JSON.stringify(contentLanguage)
+        ),
         AsyncStorage.setItem('user_profile', JSON.stringify(profile)),
+        AsyncStorage.setItem('jw_sa:user_name', name.trim()),
         AsyncStorage.setItem('onboarding_complete', 'true'),
       ]);
-    } catch { /* ignore */ }
+    } catch (_) {
+      // Silently continue even if storage fails
+    }
     router.replace('/(tabs)');
   };
 
   const renderStep = () => {
     switch (step) {
-      case 0: return <WelcomeStep onNext={() => setStep(1)} />;
-      case 1: return (
-        <LanguageStep
-          onNext={() => setStep(2)}
-          selectedLanguage={selectedLanguage}
-          onSelectLanguage={setSelectedLanguage}
-        />
-      );
-      case 2: return (
-        <ProfileStep onNext={() => setStep(3)} profile={profile} onUpdateProfile={updateProfile} />
-      );
-      case 3: return <CompleteStep onStart={handleComplete} selectedLanguage={selectedLanguage} />;
-      default: return null;
+      case 0:
+        return <NameStep name={name} setName={setName} onNext={() => setStep(1)} t={t} />;
+      case 1:
+        return <WelcomeStep onNext={() => setStep(2)} t={t} />;
+      case 2:
+        return (
+          <LanguageStep
+            onNext={() => setStep(3)}
+            selectedLanguage={selectedLanguage}
+            onSelectLanguage={setSelectedLanguage}
+            t={t}
+          />
+        );
+      case 3:
+        return (
+          <ProfileStep
+            onNext={() => setStep(4)}
+            profile={profile}
+            onUpdateProfile={updateProfile}
+            t={t}
+          />
+        );
+      case 4:
+        return (
+          <CompleteStep
+            onStart={handleComplete}
+            selectedLanguage={selectedLanguage}
+            t={t}
+          />
+        );
+      default:
+        return null;
     }
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} testID="onboarding-screen">
-      <CodexBackdrop />
-      {/* Header — back / dots / counter */}
-      <YStack paddingHorizontal="$6" paddingTop="$2" paddingBottom="$2">
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#1C1C1E' }}>
+      {/* Header with back button + dots */}
+      <YStack paddingHorizontal="$6" paddingTop="$2" paddingBottom="$1">
         <XStack alignItems="center" justifyContent="space-between">
           {step > 0 ? (
             <TouchableOpacity
-              data-testid="onboarding-back-btn"
               onPress={() => setStep((s) => Math.max(0, s - 1))}
               style={{
-                width: 40, height: 40, borderRadius: 20,
-                backgroundColor: t.surface,
-                borderWidth: 1, borderColor: t.border,
-                justifyContent: 'center', alignItems: 'center',
+                width: 40,
+                height: 40,
+                borderRadius: 20,
+                backgroundColor: '#2C2C2E',
+                justifyContent: 'center',
+                alignItems: 'center',
               }}
             >
-              <Glyph char="‹" size={22} color={t.ink} />
+              <SizableText size="$4" color="#9CA3AF">
+                ←
+              </SizableText>
             </TouchableOpacity>
           ) : (
-            <View style={{ width: 40 }} />
+            <YStack width={40} />
           )}
 
           <StepDots current={step} total={TOTAL_STEPS} />
 
-          <View
-            style={{
-              backgroundColor: t.surface,
-              borderRadius: 999,
-              paddingHorizontal: 12,
-              paddingVertical: 5,
-              borderWidth: 1,
-              borderColor: t.border,
-            }}
+          {/* Step counter */}
+          <YStack
+            backgroundColor="#2C2C2E"
+            borderRadius="$10"
+            paddingHorizontal="$3"
+            paddingVertical="$1"
           >
-            <SizableText style={{ fontFamily: fonts.mono, fontSize: 10, color: t.inkMuted, fontWeight: '700', letterSpacing: 1 }}>
-              {step + 1} / {TOTAL_STEPS}
+            <SizableText size="$2" color="#9CA3AF" fontWeight="600">
+              {step + 1}/{TOTAL_STEPS}
             </SizableText>
-          </View>
+          </YStack>
         </XStack>
       </YStack>
 
+      {/* Step content */}
       <YStack flex={1}>{renderStep()}</YStack>
     </SafeAreaView>
   );

@@ -24,8 +24,7 @@ import {
 } from '@blinkdotnew/mobile-ui';
 import { useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient } from '@blinkdotnew/sdk';
-import { useTheme } from '@/constants/theme';
+import { generateAiText } from '@/services/localAiService';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -74,15 +73,6 @@ const TYPE_CONFIG: Record<
   monthly: { label: 'Monthly', color: '#F59E0B', bg: 'rgba(245,158,11,0.15)' },
   annual:  { label: 'Annual',  color: '#5B7E6B', bg: 'rgba(91,126,107,0.15)' },
 };
-
-let blinkClient: ReturnType<typeof createClient> | null = null;
-try {
-  const projectId = process.env.EXPO_PUBLIC_BLINK_PROJECT_ID;
-  const publishableKey = process.env.EXPO_PUBLIC_BLINK_PUBLISHABLE_KEY;
-  if (projectId && publishableKey) {
-    blinkClient = createClient({ projectId, publishableKey });
-  }
-} catch {}
 
 // ─── Plan Card ────────────────────────────────────────────────────────────────
 
@@ -232,13 +222,13 @@ function CreatePlanSheet({
 
       let weekTopics: string[] = [];
 
-      if (useAI && blinkClient) {
+      if (useAI) {
         // Load user profile for context
         const profileRaw = await AsyncStorage.getItem('user_profile');
         const profile = profileRaw ? JSON.parse(profileRaw) : {};
         const lang = await AsyncStorage.getItem('selected_language');
 
-        const result = await (blinkClient as any).ai.generateText({
+        const result = await generateAiText({
           system: `You are a JW Study Assistant creating a personalized study plan based on official Jehovah's Witness publications and JW.org materials. Only use topics from official JW sources. Respond ONLY with a JSON array of ${totalWeeks} strings, each being a study topic.`,
           messages: [{
             role: 'user',
@@ -301,7 +291,7 @@ function CreatePlanSheet({
   return (
     <Sheet
       open={open}
-      onOpenChange={(o) => { if (!o) { reset(); onClose(); } }}
+      onOpenChange={(o: boolean) => { if (!o) { reset(); onClose(); } }}
       snapPoints={[85]}
       dismissOnSnapToBottom
     >
@@ -472,7 +462,6 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 
 export default function StudyScreen() {
   const router = useRouter();
-  const { t: th } = useTheme();
   const [plans, setPlans] = useState<StudyPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -493,7 +482,7 @@ export default function StudyScreen() {
   }, [loadPlans]));
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: th.bg }} testID="study-screen">
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#1C1C1E' }}>
       {/* Header */}
       <XStack
         paddingHorizontal="$5"
@@ -502,8 +491,8 @@ export default function StudyScreen() {
         justifyContent="space-between"
         alignItems="center"
       >
-        <H2 color={th.ink} fontWeight="800" style={{ fontSize: 32, fontFamily: 'Georgia, serif', letterSpacing: -0.8 }}>
-          Study Plans
+        <H2 color="#F2F2F7" fontWeight="800" style={{ fontSize: 28 }}>
+          Study Plan
         </H2>
         <Button
           size="$3"

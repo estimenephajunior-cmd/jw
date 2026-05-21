@@ -21,18 +21,25 @@ import {
   ExternalLink,
   BookMarked,
   Gem,
-  Bible,
   Mic,
   Music,
   Users,
   Heart,
   Video,
-  ChevronRightIcon,
   ArrowRight,
 } from '@blinkdotnew/mobile-ui';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useTheme } from '@/constants/theme';
+import { translate } from '@/services/i18nService';
+import { useAppStore } from '@/store/appStore';
+import {
+  absoluteWolUrl,
+  fetchWolText,
+  refsFromHtml as extractWolRefs,
+  type WolReference,
+  type WolReferenceToken,
+} from '@/services/wolReferenceService';
+import { normalizeAppLanguage, structureHtmlPart } from '@/services/sourceGatewayService';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface MeetingPart {
@@ -42,9 +49,21 @@ interface MeetingPart {
   time?: string;
   bibleRef?: string;
   questions?: string[];
-  references?: string[];
+  references?: WolReference[];
   hasVideo?: boolean;
   icon: string;
+  detailHtml?: string;
+  tokens?: WolReferenceToken[];
+  media?: Array<{ type: 'image' | 'video' | 'audio'; url: string; title?: string; alt?: string }>;
+  workbookUrl?: string;
+  video?: {
+    title: string;
+    pub: string;
+    issue: string;
+    track: string;
+    langwritten: string;
+  };
+  images?: Array<{ url: string; alt?: string }>;
 }
 
 interface WatchtowerArticle {
@@ -65,7 +84,7 @@ function getISOWeek(date: Date): { year: number; week: number } {
   return { year: d.getUTCFullYear(), week };
 }
 
-function getWeekLabel(year: number, week: number): string {
+function getWeekLabel(year: number, week: number, symbol: string): string {
   // Get Monday of given ISO week
   const simple = new Date(year, 0, 1 + (week - 1) * 7);
   const dow = simple.getDay();
@@ -73,8 +92,9 @@ function getWeekLabel(year: number, week: number): string {
   monday.setDate(simple.getDate() - (dow <= 1 ? dow - 1 : dow - 1));
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
+  const getLocaleId = (sym: string) => sym === 'ht' ? 'fr-HT' : sym;
   const fmt = (d: Date) =>
-    d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    d.toLocaleDateString(getLocaleId(symbol), { month: 'short', day: 'numeric' });
   return `${fmt(monday)} – ${fmt(sunday)}`;
 }
 
@@ -89,7 +109,145 @@ function offsetWeek(year: number, week: number, delta: number): { year: number; 
 
 // ─── HTML Parsers ─────────────────────────────────────────────────────────────
 function stripTags(html: string): string {
-  return html.replace(/<[^>]+>/g, '').trim();
+  return decodeHtml(html.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+}
+
+function decodeHtml(value: string): string {
+  return value
+    .replace(/&nbsp;|&#160;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/�/g, '-');
+}
+
+function absoluteWol(href: string): string {
+  if (!href) return '';
+  if (/^https?:\/\//i.test(href)) return href;
+  return `https://wol.jw.org${href.startsWith('/') ? href : `/${href}`}`;
+}
+
+function sectionFromHeading(text: string): MeetingPart['section'] {
+  if (/treasures|trésors|trezo|tresoros|pawòl bondye/i.test(text)) return 'treasures';
+  if (/field ministry|minist(è|e)re|minist(e|è)rio|predikasyon/i.test(text)) return 'ministry';
+  if (/living as christians|vie chrétienne|lavi nou|vida cristiana/i.test(text)) return 'living';
+  if (/opening|ouverture|ouvèti|apertura/i.test(text)) return 'opening';
+  if (/concluding|closing|conclusion|fèmti/i.test(text)) return 'closing';
+  return 'other';
+}
+
+function imagesFromHtml(html: string): Array<{ url: string; alt?: string }> {
+  const images: Array<{ url: string; alt?: string }> = [];
+  const re = /<img\b[^>]*src="([^"]+)"[^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(html)) !== null) {
+    const tag = match[0];
+    const src = match[1];
+    if (!src || /thumbnail|sprite|icon/i.test(src)) continue;
+    images.push({
+      url: absoluteWolUrl(src),
+      alt: /alt="([^"]*)"/i.exec(tag)?.[1],
+    });
+  }
+  return images;
+}
+
+function videoFromHtml(html: string): MeetingPart['video'] | undefined {
+  const anchor = /<a\b([^>]*data-video="([^"]+)"[^>]*)>([\s\S]*?)<\/a>\s*([\s\S]{0,220})/i.exec(html);
+  if (!anchor) return undefined;
+  const attrs = decodeHtml(anchor[2]);
+  const pub = /[?&]pub=([^&]+)/.exec(attrs)?.[1] ?? '';
+  const issue = /[?&]issue=([^&]+)/.exec(attrs)?.[1] ?? '';
+  const track = /[?&]track=([^&]+)/.exec(attrs)?.[1] ?? '';
+  const langwritten = /[?&]langwritten=([^&]+)/.exec(attrs)?.[1] ?? '';
+  if (!pub || !issue || !track || !langwritten) return undefined;
+  return {
+    title: stripTags(`${anchor[3]} ${anchor[4]}`).replace(/\s+Then ask.*$/i, '').trim(),
+    pub,
+    issue,
+    track,
+    langwritten,
+  };
+}
+
+function parseMeetingArticleParts(html: string, workbookUrl: string): MeetingPart[] {
+  const parts: MeetingPart[] = [];
+  let section: MeetingPart['section'] = 'other';
+  const iconMap: Record<MeetingPart['section'], string> = {
+    treasures: '💎',
+    ministry: '📋',
+    living: '❤',
+    opening: '🎵',
+    closing: '🙏',
+    other: '📖',
+  };
+
+  const headingRe = /<(h2|h3)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
+  const headings: Array<{ tag: string; index: number; end: number; text: string; html: string }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = headingRe.exec(html)) !== null) {
+    headings.push({
+      tag: match[1].toLowerCase(),
+      index: match.index,
+      end: headingRe.lastIndex,
+      text: stripTags(match[3]),
+      html: match[0],
+    });
+  }
+
+  headings.forEach((heading, i) => {
+    if (heading.tag === 'h2') {
+      section = sectionFromHeading(heading.text);
+      return;
+    }
+    if (!heading.text || /watchtower study|other meeting publications/i.test(heading.text)) return;
+    const next = headings.slice(i + 1).find((item) => item.tag === 'h2' || item.tag === 'h3');
+    const detailHtml = normalizePartHtml(html.slice(heading.end, next?.index ?? html.length));
+    const cleanTitle = heading.text.replace(/\s+/g, ' ').trim();
+    const structured = structureHtmlPart(cleanTitle, `${heading.html}${detailHtml}`);
+    const time = /\((\d+\s*min\.?)\)/i.exec(`${cleanTitle} ${structured.text}`)?.[1]?.replace('.', '');
+    const references = extractWolRefs(`${heading.html}${detailHtml}`);
+    const bibleRef = references.find((ref) => ref.kind === 'bible' && /\d+:\d+/.test(ref.text))?.text;
+    const video = videoFromHtml(detailHtml);
+    const tokenImages = structured.media
+      .filter((item) => item.type === 'image')
+      .map((item) => ({ url: item.url, alt: item.alt }));
+    const images = tokenImages.length ? tokenImages : imagesFromHtml(detailHtml);
+    parts.push({
+      id: `part-${parts.length}`,
+      section,
+      title: cleanTitle.replace(/\s*\(\d+\s*min\.?\)\s*/i, ''),
+      time,
+      bibleRef,
+      questions: structured.questions.length ? structured.questions : undefined,
+      references: references.length ? references : undefined,
+      hasVideo: Boolean(video),
+      icon: iconMap[section],
+      detailHtml,
+      tokens: structured.tokens,
+      media: structured.media,
+      workbookUrl,
+      video,
+      images,
+    });
+  });
+
+  return parts;
+}
+
+function findMidweekArticleUrl(hubHtml: string, lang: { symbol: string; wolRegion: string; wolLangParam: string }): string | null {
+  const re = new RegExp(`href="([^"]*/${lang.symbol}/wol/d/${lang.wolRegion}/${lang.wolLangParam}/\\d+)"[^>]*class="[^"]*pub-mwb`, 'i');
+  const href = re.exec(hubHtml)?.[1] ?? /href="([^"]+\/wol\/d\/[^"]+)"[^>]*class="[^"]*pub-mwb/i.exec(hubHtml)?.[1];
+  return href ? absoluteWol(href) : null;
+}
+
+function normalizePartHtml(html: string): string {
+  return html
+    .replace(/<div\b[^>]*class="[^"]*(?:resultFooter|nav|pubNav)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
+    .replace(/<span\b[^>]*class="[^"]*(?:placeholder|hidden)[^"]*"[^>]*>[\s\S]*?<\/span>/gi, '')
+    .replace(/(?:<br\s*\/?>\s*){3,}/gi, '<br><br>');
 }
 
 function parseMeetingParts(html: string): MeetingPart[] {
@@ -97,13 +255,13 @@ function parseMeetingParts(html: string): MeetingPart[] {
   let section: MeetingPart['section'] = 'other';
   let idx = 0;
 
-  // Section detection patterns (multi-lingual: EN + FR + HT)
+  // Section detection patterns
   const sectionMap: [RegExp, MeetingPart['section']][] = [
-    [/treasures from god|trésors de la parole|trezò ki nan pawòl/i, 'treasures'],
-    [/apply yourself|qualifions-nous|byen prepare w|apply yourself to the field/i, 'ministry'],
-    [/living as christians|vivons en chrétiens|lavi nou antankè kretyen|lavi nou antanke kretyen/i, 'living'],
-    [/opening song|opening prayer|cantique|kantik.*priyè/i, 'opening'],
-    [/closing song|closing prayer|cantique de conclusion|kantik final/i, 'closing'],
+    [/treasures from god/i, 'treasures'],
+    [/apply yourself/i, 'ministry'],
+    [/living as christians/i, 'living'],
+    [/opening song|opening prayer/i, 'opening'],
+    [/closing song|closing prayer/i, 'closing'],
   ];
 
   const iconMap: Record<MeetingPart['section'], string> = {
@@ -112,93 +270,54 @@ function parseMeetingParts(html: string): MeetingPart[] {
     living: '❤️',
     opening: '🎵',
     closing: '🙏',
-    other: '📌',
+    other: '📖',
   };
 
-  // ── 1. Walk h2 + h3 headings in source order ────────────────
-  // h2 marks a section; h3 = a meeting part. We pair them.
-  const headingRe = /<(h2|h3)([^>]*)>([\s\S]*?)<\/\1>/gi;
+  // Match headings
+  const headingRe = /<h[23][^>]*>([\s\S]*?)<\/h[23]>/gi;
   let match;
-  const seenTitles = new Set<string>();
   while ((match = headingRe.exec(html)) !== null) {
-    const tag = match[1].toLowerCase();
-    const text = stripTags(match[3]).replace(/\s+/g, ' ').trim();
-    if (!text || text.length < 3) continue;
+    const text = stripTags(match[1]);
+    if (!text || text.length < 4) continue;
 
-    if (tag === 'h2') {
-      // section heading
-      let newSection: MeetingPart['section'] | null = null;
-      for (const [re, sec] of sectionMap) {
-        if (re.test(text)) { newSection = sec; break; }
-      }
-      if (newSection) section = newSection;
-      // Skip emitting H2s as parts (these were the boilerplate "Étude de La Tour
-      // de Garde" / "Autres publications…" headings)
-      continue;
+    for (const [re, sec] of sectionMap) {
+      if (re.test(text)) { section = sec; break; }
     }
 
-    // h3 — a meeting part
-    // Dedupe: WOL sometimes repeats the same h3 (eg in nav + content)
-    const dedupKey = text.toLowerCase();
-    if (seenTitles.has(dedupKey)) continue;
-    seenTitles.add(dedupKey);
+    // Try to extract time "(10 min)" pattern
+    const timeM = text.match(/\((\d+\s*min)\)/i);
+    const time = timeM ? timeM[1] : undefined;
 
-    // Title-based section override (catches opening/closing rows even when
-    // there was no matching H2 right before them).
-    let rowSection: MeetingPart['section'] = section;
-    if (/intwodiksyon|introduction|opening|kantik.*priyè|pawòl entwodiksyon/i.test(text)
-        && !/konklizyon|closing|conclusion/i.test(text)) {
-      rowSection = 'opening';
-    } else if (/konklizyon|conclusion|closing|kantik final|kantik\s+\d+\s+ak\s+priyè\s*$/i.test(text)) {
-      rowSection = 'closing';
-    }
-
-    // Skip standalone "Kantik N" / "Cantique N" / "Song N" lines unless they
-    // also describe a prayer / introduction / conclusion combo.
-    if (/^(kantik|cantique|song)\s+\d+$/i.test(text)
-        && rowSection !== 'opening'
-        && rowSection !== 'closing') {
-      continue;
-    }
-
-    // Extract time "(10 min)" pattern
-    const timeM = text.match(/\((\d+\s*min[.]?)\)/i);
-    const time = timeM ? timeM[1].replace(/\.$/, '') : undefined;
-
-    // Strip leading "N. " number from title
-    const cleanTitle = text
-      .replace(/\(\d+\s*min[.]?\)/i, '')
-      .replace(/^\d+\.\s*/, '')
-      .trim();
-
-    // Bible reference patterns
-    const bibleM = cleanTitle.match(/([1-3]?\s*[A-Z][a-z]+\.?\s+\d+:\d+[\d,\s–-]*)/);
+    // Bible reference patterns: "Matthew 6:9-13", "Genesis 1:1"
+    const bibleM = text.match(/([1-3]?\s*[A-Z][a-z]+\.?\s+\d+:\d+[\d,\s–-]*)/);
     const bibleRef = bibleM ? bibleM[1].trim() : undefined;
 
-    // Publication refs
+    // Publication refs like "jr 21 ¶12", "mwb22.03 ¶4"
     const refRe = /\b([a-z]{1,5}\d{0,4}(?:\.\d+)?\s+¶?\d+)\b/gi;
-    const refs: string[] = [];
+    const refs: WolReference[] = [];
     let refM;
-    while ((refM = refRe.exec(cleanTitle)) !== null) refs.push(refM[1]);
+    while ((refM = refRe.exec(text)) !== null) {
+      refs.push({ text: refM[1], href: '', kind: 'publication' });
+    }
 
     parts.push({
       id: `part-${idx++}`,
-      section: rowSection,
-      title: cleanTitle,
+      section,
+      title: text.replace(/\(\d+\s*min\)/i, '').trim(),
       time,
       bibleRef,
-      references: refs.length ? refs : undefined,
-      hasVideo: /video|video clip|videyo/i.test(text),
-      icon: iconMap[rowSection],
+      references: refs.filter((ref) => ref.href).length ? refs.filter((ref) => ref.href) : undefined,
+      hasVideo: /video|video clip/i.test(text),
+      icon: iconMap[section],
     });
   }
 
-  // Fallback: if no h3 parsed, produce a generic structure
+  // Fallback: if no headings parsed, produce a generic structure
   if (parts.length === 0) {
     const fallback: MeetingPart['section'][] = ['opening', 'treasures', 'ministry', 'living', 'closing'];
     const titles = [
       'Opening Song & Prayer',
-      "Treasures From God's Word",
+      'Treasures From God\'s Word',
       'Apply Yourself to the Field Ministry',
       'Living as Christians',
       'Closing Song & Prayer',
@@ -233,17 +352,30 @@ function parseWatchtowerArticles(data: any, currentWeek: number): WatchtowerArti
   return articles;
 }
 
+function parseWatchtowerFromHub(html: string, lang: { symbol: string; wolRegion: string; wolLangParam: string }): WatchtowerArticle[] {
+  const section = /<h2[^>]*>\s*Watchtower Study\s*<\/h2>([\s\S]*?)(?:<h2|<\/div>\s*<div id="regionFooter")/i.exec(html)?.[1] ?? html;
+  const href = new RegExp(`href="([^"]*/${lang.symbol}/wol/d/${lang.wolRegion}/${lang.wolLangParam}/\\d+)"[^>]*class="[^"]*pub-w`, 'i').exec(section)?.[1]
+    ?? /href="([^"]+\/wol\/d\/[^"]+)"[^>]*class="[^"]*pub-w/i.exec(section)?.[1]
+    ?? '';
+  if (!href) return [];
+  const docId = /\/(\d+)(?:[#?"]|$)/.exec(href)?.[1] ?? '';
+  const card = section.slice(Math.max(0, section.indexOf(href) - 500), section.indexOf(href) + 2500);
+  const title = stripTags(/cardLine1[^>]*>([\s\S]*?)<\/div>/i.exec(card)?.[1] ?? '') || 'Watchtower Study';
+  const studyWeek = stripTags(/cardLine2[^>]*>([\s\S]*?)<\/div>/i.exec(card)?.[1] ?? '');
+  return docId ? [{ id: docId, title, studyWeek, docId, isCurrent: true }] : [];
+}
+
 // ─── Section Header ───────────────────────────────────────────────────────────
-const SECTION_LABELS: Record<MeetingPart['section'], { label: string; color: string }> = {
-  opening: { label: 'OPENING', color: '#7B6B9E' },
-  treasures: { label: 'TREASURES FROM GOD\'S WORD', color: '#C4A840' },
-  ministry: { label: 'APPLY YOURSELF TO THE FIELD MINISTRY', color: '#5B7E6B' },
-  living: { label: 'LIVING AS CHRISTIANS', color: '#7B4B4B' },
-  closing: { label: 'CLOSING', color: '#7B6B9E' },
-  other: { label: 'OTHER', color: '#6B7280' },
+const SECTION_LABELS: Record<MeetingPart['section'], { key: string; color: string }> = {
+  opening: { key: 'opening', color: '#7B6B9E' },
+  treasures: { key: 'treasures_title', color: '#C4A840' },
+  ministry: { key: 'ministry_title', color: '#5B7E6B' },
+  living: { key: 'living_title', color: '#7B4B4B' },
+  closing: { key: 'closing', color: '#7B6B9E' },
+  other: { key: 'other', color: '#6B7280' },
 };
 
-function PartCard({ part, onPress }: { part: MeetingPart; onPress: () => void }) {
+function PartCard({ part, onPress, displaySymbol }: { part: MeetingPart; onPress: () => void; displaySymbol: string }) {
   const sc = SECTION_LABELS[part.section];
   return (
     <Card
@@ -297,12 +429,9 @@ function PartCard({ part, onPress }: { part: MeetingPart; onPress: () => void })
             )}
           </XStack>
           {part.bibleRef && (
-            <XStack alignItems="center" gap="$1" marginTop="$1">
-              <BookOpen size={12} color="#7B9E5B" />
-              <SizableText size="$3" color="#7B9E5B">
-                {part.bibleRef}
-              </SizableText>
-            </XStack>
+            <SizableText size="$3" color="#7B9E5B">
+              📖 {part.bibleRef}
+            </SizableText>
           )}
           {part.references && part.references.length > 0 && (
             <XStack gap="$1" flexWrap="wrap">
@@ -315,7 +444,7 @@ function PartCard({ part, onPress }: { part: MeetingPart; onPress: () => void })
                   borderRadius="$2"
                 >
                   <SizableText size="$1" color="#6B7280">
-                    {ref}
+                    {ref.text}
                   </SizableText>
                 </YStack>
               ))}
@@ -324,7 +453,7 @@ function PartCard({ part, onPress }: { part: MeetingPart; onPress: () => void })
           {part.hasVideo && (
             <XStack alignItems="center" gap="$1">
               <SizableText size="$1" color="#EF8C4B">
-                🎬 Video — AI cannot answer video-only questions
+                {translate(displaySymbol, 'video_ai_warning')}
               </SizableText>
             </XStack>
           )}
@@ -342,7 +471,7 @@ function PartCard({ part, onPress }: { part: MeetingPart; onPress: () => void })
           onPress={onPress}
           fontSize={11}
         >
-          Prepare
+          {translate(displaySymbol, 'prepare')}
         </Button>
       </XStack>
     </Card>
@@ -352,7 +481,10 @@ function PartCard({ part, onPress }: { part: MeetingPart; onPress: () => void })
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function MeetingsScreen() {
   const router = useRouter();
-  const { t: th } = useTheme();
+  const language = useAppStore((s) => s.language);
+  const appLanguage = useAppStore((s) => s.appLanguage);
+  const contentLanguage = useAppStore((s) => s.contentLanguage);
+  const displaySymbol = appLanguage?.symbol || language?.symbol || 'en';
 
   const today = new Date();
   const current = getISOWeek(today);
@@ -369,18 +501,16 @@ export default function MeetingsScreen() {
   // ── Language helper ──────────────────────────────────────────────────────
   const getLang = useCallback(async () => {
     try {
+      const selected = normalizeAppLanguage(contentLanguage || language);
+      if (selected) return selected;
       const raw = await AsyncStorage.getItem('selected_language');
-      if (!raw) return { symbol: 'en', wolRegion: 'r1', wolLang: 'lp-e' };
+      if (!raw) return normalizeAppLanguage(null);
       const parsed = JSON.parse(raw);
-      return {
-        symbol: parsed?.symbol ?? 'en',
-        wolRegion: parsed?.wolRegion ?? 'r1',
-        wolLang: parsed?.wolLang ?? 'lp-e',
-      };
+      return normalizeAppLanguage(parsed);
     } catch {
-      return { symbol: 'en', wolRegion: 'r1', wolLang: 'lp-e' };
+      return normalizeAppLanguage(null);
     }
-  }, []);
+  }, [contentLanguage, language]);
 
   // ── Fetch Midweek ────────────────────────────────────────────────────────
   const fetchMidweek = useCallback(async () => {
@@ -389,37 +519,20 @@ export default function MeetingsScreen() {
     setMeetingData([]);
     try {
       const lang = await getLang();
-      // Step 1 — fetch the meetings HUB
-      const hubUrl = `https://wol.jw.org/${lang.symbol}/wol/meetings/${lang.wolRegion}/${lang.wolLang}/${year}/${week}`;
-      const hubResp = await fetch(hubUrl, { signal: AbortSignal.timeout(12000) });
-      if (!hubResp.ok) throw new Error(`HTTP ${hubResp.status}`);
-      const hubHtml = await hubResp.text();
-
-      // Step 2 — extract the FIRST article link under "Vie et ministère / Our
-      // Christian Life and Ministry / Lavi nou antankè Kretyen" section. The
-      // hub lists the actual mwb article as the first /wol/d/ link.
-      const articleLinkRe = new RegExp(
-        `href="(/${lang.symbol}/wol/d/${lang.wolRegion}/${lang.wolLang}/\\d+)"`,
-        'i',
-      );
-      const linkMatch = articleLinkRe.exec(hubHtml);
-      let mwbHtml = '';
-      if (linkMatch) {
-        const articleUrl = `https://wol.jw.org${linkMatch[1]}`;
-        const artResp = await fetch(articleUrl, { signal: AbortSignal.timeout(12000) });
-        if (artResp.ok) mwbHtml = await artResp.text();
-      }
-
-      // Step 3 — parse the mwb article (preferred) or fall back to hub HTML
-      const sourceHtml = mwbHtml || hubHtml;
-      const parts = parseMeetingParts(sourceHtml);
+      const url = `https://wol.jw.org/${lang.symbol}/wol/meetings/${lang.wolRegion}/${lang.wolLangParam}/${year}/${week}`;
+      const { text: html } = await fetchWolText(url);
+      const articleUrl = findMidweekArticleUrl(html, lang);
+      const parts = articleUrl
+        ? parseMeetingArticleParts((await fetchWolText(articleUrl)).text, articleUrl)
+        : parseMeetingParts(html);
+      if (!parts.length) throw new Error('No meeting parts found');
       setMeetingData(parts);
     } catch (err: any) {
       setError(err?.message ?? 'unknown');
       // Show fallback structure
       setMeetingData([
         { id: 'f0', section: 'opening', title: 'Opening Song & Prayer', icon: '🎵' },
-        { id: 'f1', section: 'treasures', title: "Treasures From God's Word (10 min)", time: '10 min', icon: '💎' },
+        { id: 'f1', section: 'treasures', title: 'Treasures From God\'s Word (10 min)', time: '10 min', icon: '💎' },
         { id: 'f2', section: 'treasures', title: 'Spiritual Gems (10 min)', time: '10 min', icon: '💡' },
         { id: 'f3', section: 'treasures', title: 'Bible Reading (4 min)', time: '4 min', icon: '📖' },
         { id: 'f4', section: 'ministry', title: 'Apply Yourself to the Field Ministry', icon: '📋' },
@@ -439,13 +552,10 @@ export default function MeetingsScreen() {
     setWatchtowerData([]);
     try {
       const lang = await getLang();
-      const now = new Date();
-      const issueCode = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
-      const url = `https://b.jw-cdn.org/apis/pub-media/v1/get-publication?pub=w&issue=${issueCode}&langwritten=${lang.symbol}&txtCMS=1`;
-      const resp = await fetch(url, { signal: AbortSignal.timeout(12000) });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const json = await resp.json();
-      const articles = parseWatchtowerArticles(json, week);
+      const url = `https://wol.jw.org/${lang.symbol}/wol/meetings/${lang.wolRegion}/${lang.wolLangParam}/${year}/${week}`;
+      const { text: html } = await fetchWolText(url);
+      const articles = parseWatchtowerFromHub(html, lang);
+      if (!articles.length) throw new Error('No Watchtower article found');
       setWatchtowerData(articles);
     } catch (err: any) {
       setError(err?.message ?? 'unknown');
@@ -471,16 +581,32 @@ export default function MeetingsScreen() {
   };
 
   const isCurrentWeek = year === current.year && week === current.week;
-  const weekLabel = getWeekLabel(year, week);
+  const weekLabel = getWeekLabel(year, week, displaySymbol);
 
   // ── Navigate to part detail ──────────────────────────────────────────────
   const handlePartPress = useCallback(
-    (part: MeetingPart) => {
+    async (part: MeetingPart) => {
+      const partKey = `meeting_part_${Date.now()}`;
       try {
-        router.push({
-          pathname: '/meeting-prep' as any,
-          params: { partData: JSON.stringify(part) },
+        await AsyncStorage.setItem(partKey, JSON.stringify(part));
+      } catch {
+        // Continue with smaller URL params if web storage is unavailable.
+      }
+      try {
+        const params = new URLSearchParams({
+          partKey,
+          partData: JSON.stringify({
+            ...part,
+            detailHtml: undefined,
+            tokens: undefined,
+            media: undefined,
+          }),
+          partTitle: part.title,
+          questions: JSON.stringify(part.questions ?? []),
+          references: JSON.stringify(part.references ?? []),
+          timeMinutes: String(parseInt(part.time ?? '5', 10) || 5),
         });
+        router.push(`/meeting-prep?${params.toString()}` as any);
       } catch {}
     },
     [router]
@@ -534,7 +660,7 @@ export default function MeetingsScreen() {
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: th.bg }} testID="meetings-screen">
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#1C1C1E' }}>
       <YStack flex={1}>
         {/* ── Header ── */}
         <XStack
@@ -545,7 +671,7 @@ export default function MeetingsScreen() {
           gap="$2"
         >
           <BookOpen size={22} color="#5B7E6B" />
-          <H2 color={th.ink} fontWeight="800" fontSize={26} style={{ fontFamily: 'Georgia, serif', letterSpacing: -0.6 }}>
+          <H2 color="#F2F2F7" fontWeight="800" fontSize={24}>
             Meeting Preparation
           </H2>
         </XStack>
@@ -656,7 +782,7 @@ export default function MeetingsScreen() {
                       (sec) => {
                         const sectionParts = meetingData.filter((p) => p.section === sec);
                         if (!sectionParts.length) return null;
-                        const { label, color } = SECTION_LABELS[sec];
+                        const { key, color } = SECTION_LABELS[sec];
                         return (
                           <YStack key={sec} gap="$2">
                             <YStack
@@ -668,7 +794,7 @@ export default function MeetingsScreen() {
                               borderLeftColor={color}
                             >
                               <SizableText size="$2" color={color} fontWeight="800" letterSpacing={0.5}>
-                                {label}
+                                {translate(displaySymbol, key)}
                               </SizableText>
                             </YStack>
                             {sectionParts.map((part) => (
@@ -676,6 +802,7 @@ export default function MeetingsScreen() {
                                 key={part.id}
                                 part={part}
                                 onPress={() => handlePartPress(part)}
+                                displaySymbol={displaySymbol}
                               />
                             ))}
                           </YStack>

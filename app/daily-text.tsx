@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useAppStore } from '@/store/appStore';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import {
@@ -11,6 +12,7 @@ import {
   Spinner,
   Input,
   Separator,
+  Sheet,
 } from '@blinkdotnew/mobile-ui';
 import {
   ArrowLeft,
@@ -23,8 +25,24 @@ import {
   AlertTriangle,
 } from '@blinkdotnew/mobile-ui';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { TouchableOpacity, Linking, Platform } from 'react-native';
-import { createClient, AsyncStorageAdapter } from '@blinkdotnew/sdk';
+import { TouchableOpacity, Linking } from 'react-native';
+import { safeBack } from '@/services/navigationService';
+import { generateAiText } from '@/services/localAiService';
+import { saveSource } from '@/services/storageService';
+import { createTranslator } from '@/services/i18nService';
+import { usePremiumTheme } from '@/hooks/usePremiumTheme';
+import {
+  absoluteWolUrl,
+  type WolPreview,
+  type WolReference,
+  type WolReferenceToken,
+} from '@/services/wolReferenceService';
+import {
+  gatewayResolveReference,
+  getDailyText as getNormalizedDailyText,
+  normalizeAppLanguage,
+} from '@/services/sourceGatewayService';
+import type { Language } from '@/types';
 
 // ─── Brand tokens ─────────────────────────────────────────────────────────────
 const PRIMARY = '#5B7E6B';
@@ -37,12 +55,6 @@ const PRIMARY_SUBTLE = 'rgba(91,126,107,0.15)';
 const PRIMARY_BORDER = 'rgba(91,126,107,0.3)';
 
 // ─── Blink SDK client ─────────────────────────────────────────────────────────
-const blink = createClient({
-  projectId: process.env.EXPO_PUBLIC_BLINK_PROJECT_ID!,
-  auth: { mode: 'headless' },
-  storage: new AsyncStorageAdapter(AsyncStorage),
-});
-
 // ─── JW AI system prompt ──────────────────────────────────────────────────────
 const JW_SYSTEM_PROMPT =
   'You are a JW study assistant. Using ONLY the following JW.org/WOL source content provided, ' +
@@ -53,64 +65,171 @@ const JW_SYSTEM_PROMPT =
 interface DailyText {
   date: string;
   scripture: string;
+  scriptureText?: string;
   comment: string;
+  commentTokens?: WolReferenceToken[];
+  references?: WolReference[];
+  audio?: { url: string; title?: string } | null;
   fullUrl?: string;
 }
 
 // ─── WOL language map ─────────────────────────────────────────────────────────
-const LANG_CONFIG: Record<string, { region: string; param: string }> = {
-  en: { region: 'r1', param: 'lp-e' },
-  fr: { region: 'r30', param: 'lp-f' },
-  es: { region: 'r4', param: 'lp-s' },
-  de: { region: 'r10', param: 'lp-g' },
-  pt: { region: 'r5', param: 'lp-p' },
-  it: { region: 'r6', param: 'lp-i' },
-};
-
-async function fetchDailyText(lang: string, dateStr: string): Promise<DailyText | null> {
-  const cfg = LANG_CONFIG[lang] ?? LANG_CONFIG['en'];
+async function fetchDailyText(language: Language, dateStr: string): Promise<DailyText | null> {
   const d = dateStr ? new Date(dateStr + 'T00:00:00') : new Date();
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;
-  const day = d.getDate();
+  const result = await getNormalizedDailyText({ date: d, language });
+  const data = result.data;
+  if (!data.scriptureRef && !data.commentText) return null;
+  return {
+    date: data.date,
+    scripture: data.scriptureRef,
+    scriptureText: data.scriptureText,
+    comment: data.commentText,
+    commentTokens: data.commentTokens,
+    references: data.references,
+    audio: data.audio,
+    fullUrl: data.sourceUrl,
+  };
+}
 
-  const url = `https://wol.jw.org/${lang}/wol/dt/${cfg.region}/${cfg.param}/${year}/${month}/${day}`;
-  const res = await fetch(url, { headers: { Accept: 'text/html' } });
-  if (!res.ok) throw new Error('Network error');
-  const html = await res.text();
+function asReference(token: WolReferenceToken): WolReference | null {
+  if (!token.href || token.kind === 'text' || token.kind === 'image' || token.kind === 'video') return null;
+  return { text: token.text, href: absoluteWolUrl(token.href), kind: token.kind };
+}
 
-  const scrMatch = html.match(/<p[^>]*class="[^"]*themeScrp[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
-  const scripture = scrMatch
-    ? scrMatch[1].replace(/<[^>]+>/g, '').replace(/&[a-z]+;/g, ' ').trim()
-    : '';
+function InlineDailyTokens({
+  tokens,
+  onReference,
+}: {
+  tokens: WolReferenceToken[];
+  onReference: (ref: WolReference) => void;
+}) {
+  return (
+    <XStack flexWrap="wrap" gap="$1" alignItems="baseline">
+      {tokens.map((token, index) => {
+        const ref = asReference(token);
+        if (!ref) {
+          return (
+            <SizableText
+              key={index}
+              size="$3"
+              color={TEXT_SECONDARY}
+              lineHeight={22}
+              width={token.text.includes('\n') ? '100%' : undefined}
+            >
+              {token.text}
+            </SizableText>
+          );
+        }
+        return (
+          <SizableText
+            key={index}
+            size="$3"
+            color={ref.kind === 'bible' || ref.kind === 'crossref' ? '#78B58A' : '#8DB4E2'}
+            lineHeight={22}
+            textDecorationLine="underline"
+            onPress={() => onReference(ref)}
+          >
+            {token.text}
+          </SizableText>
+        );
+      })}
+    </XStack>
+  );
+}
 
-  const bodyMatch = html.match(/<div[^>]*class="[^"]*body[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-  const comment = bodyMatch
-    ? bodyMatch[1].replace(/<[^>]+>/g, '').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim()
-    : '';
+function ReferenceSheet({
+  reference,
+  onClose,
+  onReference,
+  t,
+}: {
+  reference: WolReference | null;
+  onClose: () => void;
+  onReference: (ref: WolReference) => void;
+  t: ReturnType<typeof createTranslator>;
+}) {
+  const [preview, setPreview] = useState<WolPreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  if (!scripture && !comment) return null;
+  useEffect(() => {
+    if (!reference) return;
+    setLoading(true);
+    setError('');
+    setPreview(null);
+    gatewayResolveReference(reference)
+      .then((result) => setPreview(result.data))
+      .catch(() => setError(t('could_not_load_reference_preview')))
+      .finally(() => setLoading(false));
+  }, [reference]);
 
-  const dateLabel = d.toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
-
-  return { date: dateLabel, scripture, comment, fullUrl: url };
+  return (
+    <Sheet open={!!reference} onOpenChange={(v: boolean) => { if (!v) onClose(); }} snapPoints={[72]} modal={false} dismissOnSnapToBottom>
+      <Sheet.Frame backgroundColor={BG} borderTopLeftRadius="$6" borderTopRightRadius="$6">
+        <Sheet.Handle backgroundColor={CARD_BORDER} />
+        <ScrollView flex={1}>
+          <YStack padding="$5" gap="$4">
+            <SizableText size="$2" color={PRIMARY} fontWeight="800">
+              {reference?.kind === 'bible' || reference?.kind === 'crossref' ? t('bible_reference').toUpperCase() : t('publication').toUpperCase()}
+            </SizableText>
+            <SizableText size="$5" color={TEXT_PRIMARY} fontWeight="800">{reference?.text}</SizableText>
+            {loading ? (
+              <XStack gap="$2" alignItems="center">
+                <Spinner size="small" color={PRIMARY} />
+                <SizableText color={TEXT_SECONDARY}>{t('loading_reference')}</SizableText>
+              </XStack>
+            ) : error ? (
+              <SizableText color="#EF8080">{error}</SizableText>
+            ) : preview ? (
+              <YStack gap="$3">
+                {preview.title && preview.title !== reference?.text ? (
+                  <SizableText size="$4" color="#D1D5DB" fontWeight="700">{preview.title}</SizableText>
+                ) : null}
+                {preview.tokens?.length ? (
+                  <InlineDailyTokens tokens={preview.tokens} onReference={onReference} />
+                ) : (
+                  <SizableText size="$4" color={TEXT_PRIMARY} lineHeight={26}>{preview.content}</SizableText>
+                )}
+              </YStack>
+            ) : null}
+          </YStack>
+        </ScrollView>
+      </Sheet.Frame>
+    </Sheet>
+  );
 }
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function DailyTextScreen() {
   const router = useRouter();
+  const colors = usePremiumTheme();
+  const PRIMARY = colors.primary;
+  const BG = colors.bg;
+  const CARD_BG = colors.surface;
+  const CARD_BORDER = colors.border;
+  const TEXT_PRIMARY = colors.text;
+  const TEXT_SECONDARY = colors.textMuted;
+  const PRIMARY_SUBTLE = colors.glow;
+  const PRIMARY_BORDER = colors.borderStrong;
   const { date } = useLocalSearchParams<{ date?: string }>();
   const dateKey = date ?? new Date().toISOString().slice(0, 10);
+
 
   const [dailyText, setDailyText] = useState<DailyText | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [language, setLanguage] = useState('en');
+  // Use global contentLanguage from app store
+  const appLanguage = useAppStore((s) => s.appLanguage);
+  const fallbackLanguage = useAppStore((s) => s.language);
+  const contentLanguage = useAppStore((s) => s.contentLanguage || s.language);
+  const activeContentLanguage = useMemo(
+    () => normalizeAppLanguage(contentLanguage || fallbackLanguage),
+    [contentLanguage, fallbackLanguage]
+  );
+  const language = activeContentLanguage.symbol || 'en';
+  const displaySymbol = appLanguage?.symbol || language;
+  const t = createTranslator(displaySymbol);
+  const expectedPath = `/${language}/wol/dt/${activeContentLanguage.wolRegion}/${activeContentLanguage.wolLangParam}/`;
 
   const [notes, setNotes] = useState('');
   const [notesSaved, setNotesSaved] = useState(false);
@@ -118,25 +237,37 @@ export default function DailyTextScreen() {
   const [aiAnswer, setAiAnswer] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+  const [activeReference, setActiveReference] = useState<WolReference | null>(null);
 
   // ── Load data ────────────────────────────────────────────────────────────
-  useEffect(() => {
-    AsyncStorage.getItem('selected_language').then((v) => {
-      if (v) setLanguage(v.toLowerCase());
-    });
-  }, []);
+  // No need to set language from AsyncStorage, always use contentLanguage
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setLoadError(false);
-
     try {
-      const cacheKey = `daily_text_${dateKey}`;
+      const cacheKey = `daily_text_${language}_${activeContentLanguage.wolRegion}_${activeContentLanguage.wolLangParam}_${dateKey}`;
       const cached = await AsyncStorage.getItem(cacheKey);
       if (cached) {
-        setDailyText(JSON.parse(cached));
+        const parsed = JSON.parse(cached) as DailyText;
+        if (
+          parsed.fullUrl?.includes(expectedPath) &&
+          parsed.commentTokens?.length &&
+          !/meeting program|reyinyon|Ann egzamine Ekriti yo chak jou/i.test(parsed.comment)
+        ) {
+          setDailyText(parsed);
+        } else {
+          await AsyncStorage.removeItem(cacheKey);
+          const data = await fetchDailyText(activeContentLanguage, dateKey);
+          if (data) {
+            setDailyText(data);
+            await AsyncStorage.setItem(cacheKey, JSON.stringify(data));
+          } else {
+            setLoadError(true);
+          }
+        }
       } else {
-        const data = await fetchDailyText(language, dateKey);
+        const data = await fetchDailyText(activeContentLanguage, dateKey);
         if (data) {
           setDailyText(data);
           await AsyncStorage.setItem(cacheKey, JSON.stringify(data));
@@ -149,19 +280,17 @@ export default function DailyTextScreen() {
     } finally {
       setLoading(false);
     }
-
     // Load notes
     try {
-      const savedNotes = await AsyncStorage.getItem(`daily_text_notes_${dateKey}`);
+      const savedNotes = await AsyncStorage.getItem(`daily_text_notes_${language}_${dateKey}`);
       if (savedNotes) setNotes(savedNotes);
     } catch {}
-
     // Load cached AI answer
     try {
-      const savedAi = await AsyncStorage.getItem(`daily_text_ai_${dateKey}`);
+      const savedAi = await AsyncStorage.getItem(`daily_text_ai_${language}_${dateKey}`);
       if (savedAi) setAiAnswer(savedAi);
     } catch {}
-  }, [language, dateKey]);
+  }, [activeContentLanguage, language, expectedPath, dateKey]);
 
   useEffect(() => {
     loadData();
@@ -170,7 +299,7 @@ export default function DailyTextScreen() {
   // ── Save notes ───────────────────────────────────────────────────────────
   const saveNotes = async () => {
     try {
-      await AsyncStorage.setItem(`daily_text_notes_${dateKey}`, notes);
+      await AsyncStorage.setItem(`daily_text_notes_${language}_${dateKey}`, notes);
       setNotesSaved(true);
       setTimeout(() => setNotesSaved(false), 2000);
     } catch {}
@@ -180,7 +309,17 @@ export default function DailyTextScreen() {
   const saveAiAnswer = async () => {
     if (!aiAnswer) return;
     try {
-      await AsyncStorage.setItem(`daily_text_ai_${dateKey}`, aiAnswer);
+      await AsyncStorage.setItem(`daily_text_ai_${language}_${dateKey}`, aiAnswer);
+      await saveSource({
+        id: `daily_text_ai_${language}_${dateKey}`,
+        type: 'answer',
+        title: `Daily Text explanation - ${dailyText?.date ?? dateKey}`,
+        content: aiAnswer,
+        url: dailyText?.fullUrl,
+        language,
+        savedAt: new Date().toISOString(),
+        syncStatus: 'saved',
+      });
       setNotesSaved(true);
       setTimeout(() => setNotesSaved(false), 2000);
     } catch {}
@@ -194,8 +333,7 @@ export default function DailyTextScreen() {
     setAiAnswer('');
 
     try {
-      const result = await blink.ai.generateText({
-        model: 'google/gemini-flash-3',
+      const result = await generateAiText({
         messages: [
           { role: 'system', content: JW_SYSTEM_PROMPT },
           {
@@ -203,6 +341,7 @@ export default function DailyTextScreen() {
             content:
               `Daily Text for ${dailyText.date}:\n\n` +
               `Scripture: ${dailyText.scripture}\n\n` +
+              (dailyText.scriptureText ? `Scripture text: ${dailyText.scriptureText}\n\n` : '') +
               `Comment: ${dailyText.comment}\n\n` +
               "Please explain how a Jehovah's Witness can apply this text in their life today, " +
               'using only the JW content above.',
@@ -210,14 +349,9 @@ export default function DailyTextScreen() {
         ],
       });
 
-      const text =
-        typeof result === 'string'
-          ? result
-          : (result as any)?.text ?? (result as any)?.content ?? JSON.stringify(result);
-
-      setAiAnswer(text);
+      setAiAnswer(result.text);
     } catch (e: any) {
-      setAiError(e?.message ?? 'AI generation failed. Please try again.');
+      setAiError(e?.message ?? t('ai_generation_failed'));
     } finally {
       setAiLoading(false);
     }
@@ -240,12 +374,12 @@ export default function DailyTextScreen() {
         borderBottomColor={CARD_BORDER}
         backgroundColor={BG}
       >
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7} hitSlop={8}>
+        <TouchableOpacity onPress={() => safeBack(router, '/(tabs)')} activeOpacity={0.7} hitSlop={8}>
           <ArrowLeft size={22} color={TEXT_PRIMARY} />
         </TouchableOpacity>
         <YStack flex={1}>
           <SizableText size="$4" color={TEXT_PRIMARY} fontWeight="700">
-            Daily Text
+            {t('daily_text')}
           </SizableText>
           {dailyText?.date ? (
             <SizableText size="$2" color={TEXT_SECONDARY} numberOfLines={1}>
@@ -275,7 +409,7 @@ export default function DailyTextScreen() {
             <YStack alignItems="center" justifyContent="center" paddingVertical="$10" gap="$3">
               <Spinner size="large" color={PRIMARY} />
               <SizableText size="$3" color={TEXT_SECONDARY}>
-                Loading daily text…
+                {t('loading_daily_text')}
               </SizableText>
             </YStack>
           ) : loadError ? (
@@ -290,10 +424,10 @@ export default function DailyTextScreen() {
             >
               <AlertTriangle size={32} color="#F59E0B" />
               <SizableText size="$4" color={TEXT_PRIMARY} fontWeight="600" textAlign="center">
-                Could not load daily text
+                {t('could_not_load_daily_text')}
               </SizableText>
               <SizableText size="$3" color={TEXT_SECONDARY} textAlign="center">
-                Check your internet connection and try again.
+                {t('check_connection_retry')}
               </SizableText>
               <TouchableOpacity
                 onPress={loadData}
@@ -310,7 +444,7 @@ export default function DailyTextScreen() {
               >
                 <RefreshCw size={14} color="#fff" />
                 <SizableText size="$3" color="#fff" fontWeight="700">
-                  Try Again
+                  {t('try_again')}
                 </SizableText>
               </TouchableOpacity>
             </Card>
@@ -329,12 +463,17 @@ export default function DailyTextScreen() {
                 <XStack alignItems="center" gap="$2">
                   <BookOpen size={15} color={PRIMARY} />
                   <SizableText size="$2" color={PRIMARY} fontWeight="700" letterSpacing={1.2}>
-                    SCRIPTURE
+                    {t('scripture').toUpperCase()}
                   </SizableText>
                 </XStack>
                 <SizableText size="$5" color={TEXT_PRIMARY} fontWeight="700" lineHeight={28}>
                   {dailyText.scripture}
                 </SizableText>
+                {dailyText.scriptureText ? (
+                  <SizableText size="$3" color={TEXT_SECONDARY} lineHeight={22}>
+                    {dailyText.scriptureText}
+                  </SizableText>
+                ) : null}
               </Card>
 
               {/* ── Comment card ─────────────────────────────────────────── */}
@@ -349,21 +488,25 @@ export default function DailyTextScreen() {
                   elevation={2}
                 >
                   <SizableText size="$2" color={TEXT_SECONDARY} fontWeight="700" letterSpacing={1.2}>
-                    MEDITATION &amp; COMMENT
+                    {t('meditation_comment').toUpperCase()}
                   </SizableText>
-                  <SizableText
-                    size="$3"
-                    color={TEXT_SECONDARY}
-                    lineHeight={22}
-                  >
-                    {dailyText.comment}
-                  </SizableText>
+                  {dailyText.commentTokens?.length ? (
+                    <InlineDailyTokens tokens={dailyText.commentTokens} onReference={setActiveReference} />
+                  ) : (
+                    <SizableText
+                      size="$3"
+                      color={TEXT_SECONDARY}
+                      lineHeight={22}
+                    >
+                      {dailyText.comment}
+                    </SizableText>
+                  )}
                   <Separator borderColor={CARD_BORDER} />
                   <TouchableOpacity onPress={openWOL} activeOpacity={0.7}>
                     <XStack alignItems="center" gap="$2">
                       <ExternalLink size={13} color={PRIMARY} />
                       <SizableText size="$2" color={PRIMARY} fontWeight="600">
-                        Open on WOL (wol.jw.org)
+                        {t('open_on_wol')}
                       </SizableText>
                     </XStack>
                   </TouchableOpacity>
@@ -381,12 +524,12 @@ export default function DailyTextScreen() {
                 elevation={2}
               >
                 <SizableText size="$2" color={TEXT_SECONDARY} fontWeight="700" letterSpacing={1.2}>
-                  MY NOTES
+                  {t('my_notes').toUpperCase()}
                 </SizableText>
                 <Input
                   value={notes}
                   onChangeText={setNotes}
-                  placeholder="Write your personal reflection or study notes…"
+                  placeholder={t('write_personal_notes')}
                   placeholderTextColor={TEXT_SECONDARY}
                   color={TEXT_PRIMARY}
                   backgroundColor="#1C1C1E"
@@ -416,7 +559,7 @@ export default function DailyTextScreen() {
                 >
                   <Save size={13} color="#fff" />
                   <SizableText size="$3" color="#fff" fontWeight="700">
-                    {notesSaved ? 'Saved ✓' : 'Save Notes'}
+                    {notesSaved ? t('saved') : t('save_notes')}
                   </SizableText>
                 </TouchableOpacity>
               </Card>
@@ -434,11 +577,11 @@ export default function DailyTextScreen() {
                 <XStack alignItems="center" gap="$2">
                   <Sparkles size={15} color={PRIMARY} />
                   <SizableText size="$2" color={PRIMARY} fontWeight="700" letterSpacing={1.2}>
-                    AI EXPLANATION
+                    {t('ai_explanation').toUpperCase()}
                   </SizableText>
                 </XStack>
                 <SizableText size="$2" color={TEXT_SECONDARY} lineHeight={18}>
-                  Get a deeper explanation using only JW.org source content.
+                  {t('ai_explanation_hint')}
                 </SizableText>
 
                 {aiAnswer ? (
@@ -454,7 +597,7 @@ export default function DailyTextScreen() {
                       <XStack alignItems="center" gap="$2">
                         <BookOpen size={12} color={PRIMARY} />
                         <SizableText size="$1" color={PRIMARY} fontWeight="700" letterSpacing={1}>
-                          BASED ON JW.ORG SOURCES
+                          {t('based_on_jw_sources').toUpperCase()}
                         </SizableText>
                       </XStack>
                       <SizableText size="$3" color={TEXT_SECONDARY} lineHeight={22}>
@@ -481,7 +624,7 @@ export default function DailyTextScreen() {
                       >
                         <Save size={13} color={PRIMARY} />
                         <SizableText size="$3" color={PRIMARY} fontWeight="700">
-                          Save Answer
+                          {t('save_answer')}
                         </SizableText>
                       </TouchableOpacity>
                       <TouchableOpacity
@@ -500,7 +643,7 @@ export default function DailyTextScreen() {
                       >
                         <RefreshCw size={13} color={TEXT_SECONDARY} />
                         <SizableText size="$3" color={TEXT_SECONDARY} fontWeight="700">
-                          Regenerate
+                          {t('regenerate')}
                         </SizableText>
                       </TouchableOpacity>
                     </XStack>
@@ -517,7 +660,7 @@ export default function DailyTextScreen() {
                   >
                     <Spinner size="small" color={PRIMARY} />
                     <SizableText size="$3" color={TEXT_SECONDARY}>
-                      Generating explanation from JW sources…
+                      {t('generating_explanation')}
                     </SizableText>
                   </YStack>
                 ) : aiError ? (
@@ -554,7 +697,7 @@ export default function DailyTextScreen() {
                   >
                     <Sparkles size={15} color="#fff" />
                     <SizableText size="$4" color="#fff" fontWeight="700">
-                      Explain using JW Sources
+                      {t('explain_using_jw_sources')}
                     </SizableText>
                   </TouchableOpacity>
                 )}
@@ -574,10 +717,10 @@ export default function DailyTextScreen() {
                     <Volume2 size={16} color={TEXT_SECONDARY} />
                     <YStack gap="$0">
                       <SizableText size="$3" color={TEXT_PRIMARY} fontWeight="600">
-                        Audio Version
+                        {t('audio_version')}
                       </SizableText>
                       <SizableText size="$2" color={TEXT_SECONDARY}>
-                        Available on wol.jw.org
+                        {t('available_on_wol')}
                       </SizableText>
                     </YStack>
                   </XStack>
@@ -598,7 +741,7 @@ export default function DailyTextScreen() {
                   >
                     <ExternalLink size={12} color={PRIMARY} />
                     <SizableText size="$2" color={PRIMARY} fontWeight="600">
-                      Open
+                      {t('open')}
                     </SizableText>
                   </TouchableOpacity>
                 </XStack>
@@ -607,6 +750,12 @@ export default function DailyTextScreen() {
           ) : null}
         </YStack>
       </ScrollView>
+      <ReferenceSheet
+        reference={activeReference}
+        onClose={() => setActiveReference(null)}
+        onReference={setActiveReference}
+        t={t}
+      />
     </SafeAreaView>
   );
 }

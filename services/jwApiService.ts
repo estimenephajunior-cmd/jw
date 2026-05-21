@@ -3,6 +3,7 @@
 // All requests use 10-second AbortController timeouts.
 // ============================================================
 import type { BibleBook } from '../types';
+import { Platform } from 'react-native';
 
 // -----------------------------------------------------------
 // Base URLs
@@ -15,6 +16,17 @@ const BASE_WOL = 'https://wol.jw.org';
 // Internal helpers
 // -----------------------------------------------------------
 
+function proxiedUrl(url: string): string {
+  if (Platform.OS !== 'web') return url;
+  if (!/^https?:\/\//i.test(url)) return url;
+  return `http://localhost:3001/proxy?url=${encodeURIComponent(url)}`;
+}
+
+export function proxiedMediaUrl(url?: string | null): string | null {
+  if (!url) return null;
+  return proxiedUrl(url);
+}
+
 /** Standard fetch wrapper with 10-second timeout and JSON parsing */
 async function jwFetch<T = unknown>(
   url: string,
@@ -24,7 +36,7 @@ async function jwFetch<T = unknown>(
   const timeout = setTimeout(() => controller.abort(), 10_000);
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(proxiedUrl(url), {
       ...opts,
       signal: controller.signal,
       headers: {

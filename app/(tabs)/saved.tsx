@@ -31,18 +31,19 @@ import {
 } from '@blinkdotnew/mobile-ui';
 import { useAppStore } from '@/store/appStore';
 import { loadSavedSources, deleteSource } from '@/services/storageService';
+import { createTranslator } from '@/services/i18nService';
 import type { SavedSource, SavedSourceType, SyncStatus } from '@/types';
-import { useTheme } from '@/constants/theme';
+import { usePremiumTheme } from '@/hooks/usePremiumTheme';
 
 // ── Filter configuration ─────────────────────────────────────
-const FILTER_TYPES: { key: 'all' | SavedSourceType; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'daily-text', label: 'Daily Texts' },
-  { key: 'answer', label: 'Answers' },
-  { key: 'note', label: 'Notes' },
-  { key: 'article', label: 'Articles' },
-  { key: 'meeting-part', label: 'Meeting Parts' },
-  { key: 'watchtower', label: 'Watchtower' },
+const FILTER_TYPES: { key: 'all' | SavedSourceType; labelKey: string }[] = [
+  { key: 'all', labelKey: 'all' },
+  { key: 'daily-text', labelKey: 'daily_texts' },
+  { key: 'answer', labelKey: 'answers' },
+  { key: 'note', labelKey: 'notes' },
+  { key: 'article', labelKey: 'articles' },
+  { key: 'meeting-part', labelKey: 'meeting_parts' },
+  { key: 'watchtower', labelKey: 'watchtower' },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -58,7 +59,7 @@ function getTypeIcon(type: SavedSourceType) {
   }
 }
 
-function getSyncBadge(status: SyncStatus) {
+function getSyncBadge(status: SyncStatus, t: ReturnType<typeof createTranslator>) {
   switch (status) {
     case 'saved':
       return (
@@ -71,7 +72,7 @@ function getSyncBadge(status: SyncStatus) {
           alignItems="center"
         >
           <CheckCircle size={10} color="#5B7E6B" />
-          <SizableText size="$1" color="#5B7E6B" fontWeight="600">Saved</SizableText>
+          <SizableText size="$1" color="#5B7E6B" fontWeight="600">{t('saved')}</SizableText>
         </XStack>
       );
     case 'updated':
@@ -85,7 +86,7 @@ function getSyncBadge(status: SyncStatus) {
           alignItems="center"
         >
           <Clock size={10} color="#5A7B9E" />
-          <SizableText size="$1" color="#5A7B9E" fontWeight="600">Updated</SizableText>
+          <SizableText size="$1" color="#5A7B9E" fontWeight="600">{t('updated')}</SizableText>
         </XStack>
       );
     case 'needs-refresh':
@@ -99,7 +100,7 @@ function getSyncBadge(status: SyncStatus) {
           alignItems="center"
         >
           <AlertCircle size={10} color="#F59E0B" />
-          <SizableText size="$1" color="#F59E0B" fontWeight="600">Needs Refresh</SizableText>
+          <SizableText size="$1" color="#F59E0B" fontWeight="600">{t('needs_refresh')}</SizableText>
         </XStack>
       );
   }
@@ -117,19 +118,20 @@ function formatDate(iso: string): string {
 interface SavedItemCardProps {
   item: SavedSource;
   onDelete: (id: string) => void;
+  t: ReturnType<typeof createTranslator>;
 }
 
-function SavedItemCard({ item, onDelete }: SavedItemCardProps) {
+function SavedItemCard({ item, onDelete, t }: SavedItemCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const preview = item.content?.slice(0, 80) + (item.content?.length > 80 ? '…' : '');
 
   const handleOpen = () => {
     if (item.url) {
       Linking.openURL(item.url).catch(() => {
-        toast('Could not open link', { message: 'No URL available for this item.', variant: 'error' });
+        toast(t('could_not_open_link'), { message: t('no_url_available'), variant: 'error' });
       });
     } else {
-      toast('No link available', { message: 'This item has no external URL.', variant: 'warning' });
+      toast(t('no_link_available'), { message: t('item_no_external_url'), variant: 'warning' });
     }
   };
 
@@ -163,7 +165,7 @@ function SavedItemCard({ item, onDelete }: SavedItemCardProps) {
           </SizableText>
           <XStack gap="$2" alignItems="center" flexWrap="wrap">
             <SizableText size="$2" color="#6B7280">{formatDate(item.savedAt)}</SizableText>
-            {getSyncBadge(item.syncStatus)}
+            {getSyncBadge(item.syncStatus, t)}
           </XStack>
         </YStack>
       </XStack>
@@ -186,7 +188,7 @@ function SavedItemCard({ item, onDelete }: SavedItemCardProps) {
           onPress={handleOpen}
           icon={<ExternalLink size={13} color="#5B7E6B" />}
         >
-          Open
+          {t('open')}
         </Button>
 
         {/* Delete with confirm dialog */}
@@ -200,11 +202,11 @@ function SavedItemCard({ item, onDelete }: SavedItemCardProps) {
               color="#EF4444"
               icon={<Trash2 size={13} color="#EF4444" />}
             >
-              Delete
+              {t('delete')}
             </Button>
           }
-          title="Delete saved item?"
-          description={`"${item.title}" will be removed from your library. This cannot be undone.`}
+          title={t('delete_saved_item_question')}
+          description={t('delete_saved_item_description', { title: item.title })}
           onConfirm={() => { setConfirmOpen(false); onDelete(item.id); }}
           onCancel={() => setConfirmOpen(false)}
           open={confirmOpen}
@@ -216,7 +218,7 @@ function SavedItemCard({ item, onDelete }: SavedItemCardProps) {
 }
 
 // ── Empty state ───────────────────────────────────────────────
-function EmptyState() {
+function EmptyState({ t }: { t: ReturnType<typeof createTranslator> }) {
   return (
     <YStack alignItems="center" paddingTop="$12" gap="$4">
       <YStack
@@ -233,10 +235,10 @@ function EmptyState() {
       </YStack>
       <YStack alignItems="center" gap="$2">
         <SizableText size="$5" color="#F2F2F7" fontWeight="700" textAlign="center">
-          Nothing saved yet
+          {t('nothing_saved_yet')}
         </SizableText>
         <SizableText size="$3" color="#9CA3AF" textAlign="center" maxWidth={280} lineHeight={20}>
-          Save daily texts, answers, meeting prep, and articles for offline access.
+          {t('saved_empty_hint')}
         </SizableText>
       </YStack>
     </YStack>
@@ -245,9 +247,12 @@ function EmptyState() {
 
 // ── Main Screen ───────────────────────────────────────────────
 export default function SavedScreen() {
-  const { t: th } = useTheme();
+  const colors = usePremiumTheme();
   const storeItems = useAppStore((s) => s.savedSources);
   const removeSavedSource = useAppStore((s) => s.removeSavedSource);
+  const appLanguage = useAppStore((s) => s.appLanguage);
+  const language = useAppStore((s) => s.language);
+  const t = createTranslator(appLanguage?.symbol || language?.symbol || 'en');
 
   const [items, setItems] = useState<SavedSource[]>([]);
   const [filter, setFilter] = useState<'all' | SavedSourceType>('all');
@@ -282,9 +287,9 @@ export default function SavedScreen() {
     try {
       // Trigger a reload; actual re-fetch is handled by backend services
       await loadItems();
-      toast('Content refreshed', { message: 'Daily text and meeting data updated.', variant: 'success' });
+      toast(t('content_refreshed'), { message: t('daily_meeting_updated'), variant: 'success' });
     } catch {
-      toast('Refresh failed', { message: 'Check your connection and try again.', variant: 'error' });
+      toast(t('refresh_failed'), { message: t('check_connection_retry'), variant: 'error' });
     } finally {
       setIsRefreshing(false);
     }
@@ -296,9 +301,9 @@ export default function SavedScreen() {
       await deleteSource(id);
       removeSavedSource(id);
       setItems((prev) => prev.filter((i) => i.id !== id));
-      toast('Item deleted', { variant: 'success' });
+      toast(t('item_deleted'), { variant: 'success' });
     } catch {
-      toast('Delete failed', { message: 'Could not remove item.', variant: 'error' });
+      toast(t('delete_failed'), { message: t('could_not_remove_item'), variant: 'error' });
     }
   };
 
@@ -311,7 +316,7 @@ export default function SavedScreen() {
   });
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: th.bg }} testID="saved-screen">
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
       <YStack flex={1}>
         {/* ── Header ── */}
         <XStack
@@ -321,15 +326,15 @@ export default function SavedScreen() {
           justifyContent="space-between"
           alignItems="center"
         >
-          <SizableText size="$8" color={th.ink} fontWeight="800" style={{ fontFamily: 'Georgia, serif', letterSpacing: -0.8, fontSize: 32 }}>
-            Library
+          <SizableText size="$8" color={colors.text} fontWeight="900" letterSpacing={-0.6}>
+            {t('saved_library')}
           </SizableText>
           <XStack gap="$2">
             <Button
               size="$3"
               chromeless
               onPress={() => setShowSearch((v) => !v)}
-              icon={<Search size={20} color={showSearch ? '#5B7E6B' : '#9CA3AF'} />}
+              icon={<Search size={20} color={showSearch ? colors.primary : colors.textMuted} />}
             />
             <Button
               size="$3"
@@ -338,8 +343,8 @@ export default function SavedScreen() {
               disabled={isRefreshing}
               icon={
                 isRefreshing
-                  ? <Spinner size="small" color="#5B7E6B" />
-                  : <RefreshCw size={20} color="#9CA3AF" />
+                  ? <Spinner size="small" color={colors.primary} />
+                  : <RefreshCw size={20} color={colors.textMuted} />
               }
             />
           </XStack>
@@ -349,13 +354,13 @@ export default function SavedScreen() {
         {showSearch && (
           <YStack paddingHorizontal="$5" paddingBottom="$2">
             <Input
-              placeholder="Search saved items…"
+              placeholder={t('search_saved_items')}
               value={searchQuery}
               onChangeText={setSearchQuery}
-              backgroundColor="#2C2C2E"
-              borderColor="#3A3A3C"
-              color="#F2F2F7"
-              placeholderTextColor="#6B7280"
+              backgroundColor={colors.surface}
+              borderColor={colors.border}
+              color={colors.text}
+              placeholderTextColor={colors.textMuted}
               borderRadius="$4"
               height={42}
               autoFocus
@@ -367,16 +372,16 @@ export default function SavedScreen() {
         <XStack paddingHorizontal="$5" paddingBottom="$3">
           <Button
             size="$3"
-            backgroundColor="rgba(91,126,107,0.12)"
-            borderColor="rgba(91,126,107,0.3)"
+            backgroundColor={colors.glow}
+            borderColor={colors.borderStrong}
             borderWidth={1}
-            color="#5B7E6B"
+            color={colors.primary}
             onPress={handleRefresh}
             disabled={isRefreshing}
-            icon={isRefreshing ? <Spinner size="small" color="#5B7E6B" /> : <RefreshCw size={14} color="#5B7E6B" />}
+            icon={isRefreshing ? <Spinner size="small" color={colors.primary} /> : <RefreshCw size={14} color={colors.primary} />}
             borderRadius="$10"
           >
-            Refresh JW Content
+            {t('refresh_jw_content')}
           </Button>
         </XStack>
 
@@ -393,21 +398,21 @@ export default function SavedScreen() {
               return (
                 <YStack
                   key={f.key}
-                  backgroundColor={active ? '#5B7E6B' : '#2C2C2E'}
+                  backgroundColor={active ? colors.primary : colors.surface}
                   borderRadius="$10"
                   paddingHorizontal="$3"
                   paddingVertical="$2"
                   borderWidth={1}
-                  borderColor={active ? '#5B7E6B' : '#3A3A3C'}
+                  borderColor={active ? colors.primary : colors.border}
                   pressStyle={{ opacity: 0.75 }}
                   onPress={() => setFilter(f.key)}
                 >
                   <SizableText
                     size="$3"
-                    color={active ? 'white' : '#9CA3AF'}
+                    color={active ? 'white' : colors.textMuted}
                     fontWeight={active ? '700' : '400'}
                   >
-                    {f.label}
+                    {t(f.labelKey)}
                   </SizableText>
                 </YStack>
               );
@@ -418,11 +423,11 @@ export default function SavedScreen() {
         {/* ── List ── */}
         {isLoading ? (
           <YStack flex={1} justifyContent="center" alignItems="center">
-            <Spinner size="large" color="#5B7E6B" />
+            <Spinner size="large" color={colors.primary} />
           </YStack>
         ) : filtered.length === 0 ? (
           <ScrollView flex={1} showsVerticalScrollIndicator={false} paddingHorizontal="$5">
-            <EmptyState />
+            <EmptyState t={t} />
           </ScrollView>
         ) : (
           <FlatList
@@ -432,7 +437,7 @@ export default function SavedScreen() {
             showsVerticalScrollIndicator={false}
             renderItem={({ item }) => (
               <YStack marginBottom="$3">
-                <SavedItemCard item={item} onDelete={handleDelete} />
+                <SavedItemCard item={item} onDelete={handleDelete} t={t} />
               </YStack>
             )}
           />

@@ -14,6 +14,7 @@ import type {
   SavedSource,
   Reminder,
 } from '../types';
+import type { PremiumThemeMode } from '@/constants/premiumTheme';
 
 // -----------------------------------------------------------
 // Store shape
@@ -22,6 +23,12 @@ interface AppState {
   // ── Language ──────────────────────────────────────────────
   language: Language | null;
   setLanguage: (lang: Language) => void;
+  appLanguage: Language | null;
+  setAppLanguage: (lang: Language) => void;
+  contentLanguage: Language | null;
+  setContentLanguage: (lang: Language) => void;
+  theme: PremiumThemeMode;
+  setTheme: (theme: PremiumThemeMode) => void;
 
   // ── User profile ──────────────────────────────────────────
   userProfile: UserProfile | null;
@@ -68,6 +75,12 @@ export const useAppStore = create<AppState>()(
       // ── Language ───────────────────────────────────────────
       language: null,
       setLanguage: (lang) => set({ language: lang }),
+      appLanguage: null,
+      setAppLanguage: (lang) => set({ appLanguage: lang }),
+      contentLanguage: null,
+      setContentLanguage: (lang) => set({ contentLanguage: lang }),
+      theme: 'dark',
+      setTheme: (theme) => set({ theme }),
 
       // ── User profile ───────────────────────────────────────
       userProfile: null,
@@ -130,6 +143,9 @@ export const useAppStore = create<AppState>()(
       // Persist everything except transient UI state
       partialize: (state) => ({
         language: state.language,
+        appLanguage: state.appLanguage,
+        contentLanguage: state.contentLanguage,
+        theme: state.theme,
         userProfile: state.userProfile,
         isOnboardingComplete: state.isOnboardingComplete,
         savedSources: state.savedSources,

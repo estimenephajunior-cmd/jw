@@ -1,9 +1,10 @@
 // ============================================================
 // JW Study Assistant — Meeting Part Preparation Screen
 // ============================================================
-import { useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
+import { Image } from 'expo-image';
 import {
   YStack,
   XStack,
@@ -12,6 +13,7 @@ import {
   Button,
   ScrollView,
   BlinkToggleGroup,
+  Sheet,
   Spinner,
   Separator,
   toast,
@@ -26,17 +28,43 @@ import {
   RefreshCw,
   CheckCircle,
   AlignLeft,
+  Video,
 } from '@blinkdotnew/mobile-ui';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Clipboard } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAppStore } from '@/store/appStore';
 import { generateMeetingAnswer } from '@/services/aiRetrievalService';
 import { saveSource } from '@/services/storageService';
+import { safeBack } from '@/services/navigationService';
+import { getVideoSource, proxiedMediaUrl } from '@/services/jwApiService';
+import {
+  absoluteWolUrl,
+  stripHtml,
+  tokenizeWolHtml,
+  type WolReference,
+  type WolReferenceToken,
+  type WolPreview,
+} from '@/services/wolReferenceService';
+import { gatewayResolveReference } from '@/services/sourceGatewayService';
 import type { GeneratedAnswer } from '@/types';
 
 // ── Types ─────────────────────────────────────────────────────
 type AnswerLength = 'short' | 'medium' | 'long';
 type AnswerTone = 'natural' | 'heartfelt' | 'scriptural';
+
+interface MeetingPartData {
+  title?: string;
+  time?: string;
+  questions?: string[];
+  references?: Array<string | WolReference>;
+  detailHtml?: string;
+  tokens?: WolReferenceToken[];
+  media?: Array<{ type: 'image' | 'video' | 'audio'; url: string; title?: string; alt?: string }>;
+  workbookUrl?: string;
+  video?: { title: string; pub: string; issue: string; track: string; langwritten: string };
+  images?: Array<{ url: string; alt?: string }>;
+}
 
 const LENGTH_OPTIONS = [
   { label: '30 sec', value: 'short' },
@@ -80,6 +108,163 @@ function RefChip({ reference }: { reference: string }) {
         : <FileText size={12} color={colors.text} />}
       <SizableText size="$2" color={colors.text} fontWeight="600">{reference}</SizableText>
     </XStack>
+  );
+}
+
+function asReference(token: WolReferenceToken): WolReference | null {
+  if (!token.href || token.kind === 'text' || token.kind === 'image' || token.kind === 'video') return null;
+  return {
+    text: token.text,
+    href: absoluteWolUrl(token.href),
+    kind: token.kind,
+  };
+}
+
+function InlineTokens({
+  tokens,
+  onReference,
+  videoUrl,
+}: {
+  tokens: WolReferenceToken[];
+  onReference: (ref: WolReference) => void;
+  videoUrl?: string | null;
+}) {
+  return (
+    <XStack flexWrap="wrap" gap="$1" alignItems="baseline">
+      {tokens.map((token, index) => {
+        const ref = asReference(token);
+        if (token.kind === 'image' && token.src) {
+          return (
+            <YStack key={index} width="100%" paddingVertical="$2">
+              <Image
+                source={{ uri: token.src }}
+                style={{ width: '100%', aspectRatio: 16 / 9, borderRadius: 10, backgroundColor: '#111' }}
+                contentFit="contain"
+                transition={150}
+              />
+            </YStack>
+          );
+        }
+        if (token.kind === 'video') {
+          const targetUrl = token.href || videoUrl;
+          if (!targetUrl) return null;
+          if (videoUrl) {
+            return (
+              <YStack key={index} width="100%" gap="$2" paddingVertical="$2">
+                <SizableText size="$3" color="#78B58A" fontWeight="700">{token.text}</SizableText>
+                {React.createElement('video', {
+                  src: videoUrl,
+                  controls: true,
+                  style: { width: '100%', borderRadius: 10, backgroundColor: '#111' },
+                  playsInline: true,
+                })}
+              </YStack>
+            );
+          }
+          return (
+            <Button
+              key={index}
+              size="$3"
+              backgroundColor="rgba(91,126,107,0.15)"
+              borderColor="rgba(91,126,107,0.3)"
+              borderWidth={1}
+              color="#78B58A"
+              onPress={() => Linking.openURL(targetUrl).catch(() => {})}
+              icon={<Video size={14} color="#78B58A" />}
+            >
+              {token.text}
+            </Button>
+          );
+        }
+        if (!ref) {
+          return (
+            <SizableText
+              key={index}
+              size="$3"
+              color="#D1D5DB"
+              lineHeight={22}
+              width={token.text.includes('\n') ? '100%' : undefined}
+            >
+              {token.text}
+            </SizableText>
+          );
+        }
+        return (
+          <SizableText
+            key={index}
+            size="$3"
+            color={ref.kind === 'bible' ? '#78B58A' : '#8DB4E2'}
+            lineHeight={22}
+            textDecorationLine="underline"
+            onPress={() => onReference(ref)}
+          >
+            {token.text}
+          </SizableText>
+        );
+      })}
+    </XStack>
+  );
+}
+
+function ReferenceSheet({
+  open,
+  onClose,
+  reference,
+  onReference,
+}: {
+  open: boolean;
+  onClose: () => void;
+  reference: WolReference | null;
+  onReference: (ref: WolReference) => void;
+}) {
+  const [preview, setPreview] = useState<WolPreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!open || !reference) return;
+    setLoading(true);
+    setError('');
+    setPreview(null);
+    gatewayResolveReference(reference)
+      .then((result) => setPreview(result.data))
+      .catch(() => setError('Could not load this reference preview.'))
+      .finally(() => setLoading(false));
+  }, [open, reference]);
+
+  return (
+    <Sheet open={open} onOpenChange={(v: boolean) => { if (!v) onClose(); }} snapPoints={[75]} modal={false} dismissOnSnapToBottom>
+      <Sheet.Frame backgroundColor="#1C1C1E" borderTopLeftRadius="$6" borderTopRightRadius="$6">
+        <Sheet.Handle backgroundColor="#3A3A3C" />
+        <ScrollView flex={1}>
+          <YStack padding="$5" gap="$4">
+            <SizableText size="$2" color="#5B7E6B" fontWeight="800">
+              {reference?.kind === 'bible' ? 'BIBLE VERSE' : 'PUBLICATION'}
+            </SizableText>
+            <SizableText size="$5" color="#F2F2F7" fontWeight="800">{reference?.text}</SizableText>
+            {loading ? (
+              <XStack gap="$2" alignItems="center">
+                <Spinner size="small" color="#5B7E6B" />
+                <SizableText color="#9CA3AF">Loading reference...</SizableText>
+              </XStack>
+            ) : error ? (
+              <SizableText color="#EF8080">{error}</SizableText>
+            ) : preview ? (
+              <YStack gap="$3">
+                {preview.title && preview.title !== reference?.text ? (
+                  <SizableText size="$4" color="#D1D5DB" fontWeight="700">{preview.title}</SizableText>
+                ) : null}
+                {preview.tokens?.length ? (
+                  <InlineTokens tokens={preview.tokens} onReference={onReference} />
+                ) : (
+                  <SizableText size="$4" color="#F2F2F7" lineHeight={26}>{preview.content}</SizableText>
+                )}
+              </YStack>
+            ) : null}
+          </YStack>
+        </ScrollView>
+      </Sheet.Frame>
+    </Sheet>
   );
 }
 
@@ -186,23 +371,47 @@ function AnswerCard({
 export default function MeetingPrepScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
+    partData?: string;
+    partKey?: string;
     partTitle: string;
     questions: string;   // JSON array
     references: string;  // JSON array
     timeMinutes: string;
   }>();
 
-  const partTitle = params.partTitle ?? 'Meeting Part';
+  const initialPartData: MeetingPartData = (() => {
+    try { return params.partData ? JSON.parse(params.partData) as MeetingPartData : {}; } catch { return {}; }
+  })();
+  const [partData, setPartData] = useState<MeetingPartData>(initialPartData);
+
+  useEffect(() => {
+    if (!params.partKey) return;
+    AsyncStorage.getItem(params.partKey)
+      .then((raw) => {
+        if (raw) setPartData(JSON.parse(raw) as MeetingPartData);
+      })
+      .catch(() => {});
+  }, [params.partKey]);
+  const partTitle = partData.title ?? params.partTitle ?? 'Meeting Part';
   const questions: string[] = (() => {
+    if (partData.questions) return partData.questions;
     try { return JSON.parse(params.questions ?? '[]') as string[]; } catch { return []; }
   })();
-  const references: string[] = (() => {
-    try { return JSON.parse(params.references ?? '[]') as string[]; } catch { return []; }
+  const references: WolReference[] = (() => {
+    const normalize = (items: Array<string | WolReference>) => items
+      .map((item) => typeof item === 'string'
+        ? { text: item, href: partData.workbookUrl ?? '', kind: isBibleRef(item) ? 'bible' as const : 'publication' as const }
+        : { ...item, href: absoluteWolUrl(item.href) })
+      .filter((item) => item.text && item.href);
+    if (partData.references) return normalize(partData.references);
+    try { return normalize(JSON.parse(params.references ?? '[]') as Array<string | WolReference>); } catch { return []; }
   })();
-  const timeMinutes = parseInt(params.timeMinutes ?? '5', 10);
+  const timeMinutes = parseInt(partData.time ?? params.timeMinutes ?? '5', 10);
 
   const addSavedSource = useAppStore((s) => s.addSavedSource);
-  const language = useAppStore((s) => s.language);
+  // Use global contentLanguage for all content and video fetching
+  const contentLanguage = useAppStore((s) => s.contentLanguage);
+  const language = contentLanguage?.symbol || 'en';
 
   const [answerLength, setAnswerLength] = useState<AnswerLength>('medium');
   const [tone, setTone] = useState<AnswerTone>('natural');
@@ -210,6 +419,27 @@ export default function MeetingPrepScreen() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSavingAnswer, setIsSavingAnswer] = useState(false);
   const [answerSaved, setAnswerSaved] = useState(false);
+  const [activeReference, setActiveReference] = useState<WolReference | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const detailTokens = partData.tokens?.length
+    ? partData.tokens
+    : partData.detailHtml
+      ? tokenizeWolHtml(partData.detailHtml)
+      : [];
+
+  useEffect(() => {
+    const video = partData.video;
+    if (!video) return;
+    // Always use contentLanguage for video fetching
+    const lang = contentLanguage?.code || video.langwritten;
+    getVideoSource(video.pub, Number(video.track), lang)
+      .then((raw: any) => {
+        const files = raw?.files?.[lang]?.MP4 ?? raw?.files?.[lang]?.M4V ?? [];
+        const url = files?.[0]?.file?.url;
+        setVideoUrl(proxiedMediaUrl(url));
+      })
+      .catch(() => {});
+  }, [partData.video?.pub, partData.video?.issue, partData.video?.track, contentLanguage]);
 
   const generateAnswer = useCallback(async (
     length: AnswerLength,
@@ -218,12 +448,16 @@ export default function MeetingPrepScreen() {
     setIsGenerating(true);
     setAnswerSaved(false);
     try {
+      const retrievedContent = [
+        partData.detailHtml ? stripHtml(partData.detailHtml) : '',
+        ...references.map((ref) => `${ref.text}: ${ref.href}`),
+      ].filter(Boolean).join('\n\n');
       const answer = await generateMeetingAnswer(
         partTitle,
         questions,
-        references,
-        '', // retrievedContent — populated by backend
-        [],
+        references.map((ref) => ref.text),
+        retrievedContent,
+        references.map((ref) => ({ title: ref.text, url: ref.href })),
         length,
         t,
       );
@@ -236,7 +470,7 @@ export default function MeetingPrepScreen() {
     } finally {
       setIsGenerating(false);
     }
-  }, [partTitle, questions, references]);
+  }, [partData.detailHtml, partTitle, questions, references]);
 
   const handleRefine = async (overrideLength?: AnswerLength, overrideTone?: AnswerTone) => {
     const l = overrideLength ?? answerLength;
@@ -255,7 +489,7 @@ export default function MeetingPrepScreen() {
         type: 'answer' as const,
         title: `Answer: ${partTitle}`,
         content: generatedAnswer.content,
-        language: language?.code ?? 'E',
+        language,
         savedAt: new Date().toISOString(),
         syncStatus: 'saved' as const,
       };
@@ -287,7 +521,7 @@ export default function MeetingPrepScreen() {
         <Button
           chromeless
           size="$3"
-          onPress={() => router.back()}
+          onPress={() => safeBack(router, '/(tabs)/meetings')}
           icon={<ChevronLeft size={22} color="#9CA3AF" />}
         />
         <YStack flex={1} gap="$1">
@@ -314,6 +548,20 @@ export default function MeetingPrepScreen() {
       <ScrollView flex={1} showsVerticalScrollIndicator={false}>
         <YStack padding="$4" gap="$5" paddingBottom="$12">
 
+          {detailTokens.length > 0 && (
+            <YStack gap="$3">
+              <XStack gap="$2" alignItems="center">
+                <FileText size={16} color="#5B7E6B" />
+                <SizableText size="$3" color="#9CA3AF" fontWeight="700" letterSpacing={0.5}>
+                  SECTION CONTENT
+                </SizableText>
+              </XStack>
+              <Card backgroundColor="#202124" borderRadius="$4" padding="$4" borderWidth={1} borderColor="#34383E" gap="$3">
+                <InlineTokens tokens={detailTokens} onReference={setActiveReference} videoUrl={videoUrl} />
+              </Card>
+            </YStack>
+          )}
+
           {/* ── References section ── */}
           {references.length > 0 && (
             <YStack gap="$3">
@@ -325,7 +573,14 @@ export default function MeetingPrepScreen() {
               </XStack>
               <XStack flexWrap="wrap" gap="$2">
                 {references.map((ref, i) => (
-                  <RefChip key={`ref-${i}`} reference={ref} />
+                  <Button
+                    key={`ref-${i}`}
+                    chromeless
+                    padding={0}
+                    onPress={() => setActiveReference(ref)}
+                  >
+                    <RefChip reference={ref.text} />
+                  </Button>
                 ))}
               </XStack>
             </YStack>
@@ -463,6 +718,12 @@ export default function MeetingPrepScreen() {
 
         </YStack>
       </ScrollView>
+      <ReferenceSheet
+        open={Boolean(activeReference)}
+        onClose={() => setActiveReference(null)}
+        reference={activeReference}
+        onReference={setActiveReference}
+      />
     </SafeAreaView>
   );
 }

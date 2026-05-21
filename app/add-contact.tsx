@@ -20,6 +20,8 @@ import {
 } from '@blinkdotnew/mobile-ui';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAppStore } from '@/store/appStore';
+import { createTranslator } from '@/services/i18nService';
 import type { MinistryContact } from './(tabs)/ministry';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -27,14 +29,6 @@ import type { MinistryContact } from './(tabs)/ministry';
 function generateId() {
   return `contact_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
-
-const STATUS_OPTIONS = [
-  { label: 'First Call',      value: 'first-call' },
-  { label: 'Return Visit',    value: 'return-visit' },
-  { label: 'Bible Study',     value: 'bible-study' },
-  { label: 'Inactive',        value: 'inactive' },
-  { label: 'Not Interested',  value: 'not-interested' },
-];
 
 // ─── Chip input ───────────────────────────────────────────────────────────────
 
@@ -155,6 +149,17 @@ function Field({
 export default function AddContactScreen() {
   const router = useRouter();
   const { id: editId } = useLocalSearchParams<{ id?: string }>();
+  const appLanguage = useAppStore((s) => s.appLanguage);
+  const language = useAppStore((s) => s.language);
+  const t = createTranslator(appLanguage?.symbol || language?.symbol || 'en');
+
+  const statusOptions = [
+    { label: t('first_call'), value: 'first-call' },
+    { label: t('return_visit'), value: 'return-visit' },
+    { label: t('bible_study'), value: 'bible-study' },
+    { label: t('inactive'), value: 'inactive' },
+    { label: t('not_interested'), value: 'not-interested' },
+  ];
 
   const [saving, setSaving] = useState(false);
 
@@ -174,7 +179,7 @@ export default function AddContactScreen() {
 
   const handleSave = async () => {
     if (!name.trim()) {
-      Alert.alert('Name required', 'Please enter a name for this contact.');
+      Alert.alert(t('name_required'), t('enter_contact_name'));
       return;
     }
 
@@ -212,7 +217,7 @@ export default function AddContactScreen() {
       await AsyncStorage.setItem('jw_sa:contacts', JSON.stringify(contacts));
       router.back();
     } catch (err) {
-      Alert.alert('Error', 'Could not save contact. Please try again.');
+      Alert.alert(t('error'), t('could_not_save_contact_retry'));
     } finally {
       setSaving(false);
     }
@@ -238,7 +243,7 @@ export default function AddContactScreen() {
           <ArrowLeft size={22} color="#9CA3AF" />
         </TouchableOpacity>
         <SizableText size="$6" color="#F2F2F7" fontWeight="700" flex={1}>
-          {editId ? 'Edit Contact' : 'Add Contact'}
+          {editId ? t('edit_contact') : t('add_contact')}
         </SizableText>
         {saving ? (
           <Spinner size="small" color="#5B7E6B" />
@@ -251,7 +256,7 @@ export default function AddContactScreen() {
             onPress={handleSave}
             pressStyle={{ opacity: 0.8 }}
           >
-            Save
+            {t('save')}
           </Button>
         )}
       </XStack>
@@ -263,14 +268,14 @@ export default function AddContactScreen() {
           {/* Basic Info */}
           <YStack gap="$4">
             <SizableText size="$2" color="#9CA3AF" fontWeight="700" letterSpacing={1.5}>
-              BASIC INFO
+              {t('basic_info')}
             </SizableText>
 
-            <Field label="Name" required>
+            <Field label={t('name')} required>
               <Input
                 value={name}
                 onChangeText={setName}
-                placeholder="Full name…"
+                placeholder={t('full_name_placeholder')}
                 placeholderTextColor="#4B5563"
                 backgroundColor="#2C2C2E"
                 borderColor="#3A3A3C"
@@ -280,11 +285,11 @@ export default function AddContactScreen() {
               />
             </Field>
 
-            <Field label="Nickname">
+            <Field label={t('nickname')}>
               <Input
                 value={nickname}
                 onChangeText={setNickname}
-                placeholder="e.g. Mrs. Johnson…"
+                placeholder={t('nickname_placeholder')}
                 placeholderTextColor="#4B5563"
                 backgroundColor="#2C2C2E"
                 borderColor="#3A3A3C"
@@ -294,7 +299,7 @@ export default function AddContactScreen() {
               />
             </Field>
 
-            <Field label="Phone">
+            <Field label={t('phone')}>
               <Input
                 value={phone}
                 onChangeText={setPhone}
@@ -309,11 +314,11 @@ export default function AddContactScreen() {
               />
             </Field>
 
-            <Field label="Address">
+            <Field label={t('address')}>
               <Input
                 value={address}
                 onChangeText={setAddress}
-                placeholder="Street address…"
+                placeholder={t('street_address_placeholder')}
                 placeholderTextColor="#4B5563"
                 backgroundColor="#2C2C2E"
                 borderColor="#3A3A3C"
@@ -323,12 +328,12 @@ export default function AddContactScreen() {
               />
             </Field>
 
-            <Field label="Status">
+            <Field label={t('status')}>
               <BlinkSelect
-                items={STATUS_OPTIONS}
+                items={statusOptions}
                 value={status}
                 onValueChange={(v) => setStatus(v as MinistryContact['status'])}
-                placeholder="Select status…"
+                placeholder={t('select_status')}
               />
             </Field>
           </YStack>
@@ -338,38 +343,38 @@ export default function AddContactScreen() {
           {/* Ministry Details */}
           <YStack gap="$4">
             <SizableText size="$2" color="#9CA3AF" fontWeight="700" letterSpacing={1.5}>
-              MINISTRY DETAILS
+              {t('ministry_details')}
             </SizableText>
 
             <ChipInput
-              label="Topics Discussed"
+              label={t('topics_discussed')}
               chips={topics}
               onAdd={v => setTopics(prev => [...prev, v])}
               onRemove={v => setTopics(prev => prev.filter(t => t !== v))}
-              placeholder="e.g. Kingdom of God…"
+              placeholder={t('topics_placeholder')}
             />
 
             <ChipInput
-              label="Scriptures Used"
+              label={t('scriptures_used')}
               chips={scriptures}
               onAdd={v => setScriptures(prev => [...prev, v])}
               onRemove={v => setScriptures(prev => prev.filter(s => s !== v))}
-              placeholder="e.g. John 3:16…"
+              placeholder={t('scripture_single_placeholder')}
             />
 
             <ChipInput
-              label="Publications Shared"
+              label={t('publications_shared')}
               chips={publications}
               onAdd={v => setPublications(prev => [...prev, v])}
               onRemove={v => setPublications(prev => prev.filter(p => p !== v))}
-              placeholder="e.g. What Does the Bible Really Teach?…"
+              placeholder={t('publication_shared_placeholder')}
             />
 
-            <Field label="Questions Asked">
+            <Field label={t('questions_asked')}>
               <Input
                 value={questions}
                 onChangeText={setQuestions}
-                placeholder="Questions or concerns raised…"
+                placeholder={t('questions_placeholder')}
                 placeholderTextColor="#4B5563"
                 backgroundColor="#2C2C2E"
                 borderColor="#3A3A3C"
@@ -383,11 +388,11 @@ export default function AddContactScreen() {
               />
             </Field>
 
-            <Field label="Notes">
+            <Field label={t('notes')}>
               <Input
                 value={notes}
                 onChangeText={setNotes}
-                placeholder="General notes about this contact…"
+                placeholder={t('contact_notes_placeholder')}
                 placeholderTextColor="#4B5563"
                 backgroundColor="#2C2C2E"
                 borderColor="#3A3A3C"
@@ -407,10 +412,10 @@ export default function AddContactScreen() {
           {/* Visit Scheduling */}
           <YStack gap="$4">
             <SizableText size="$2" color="#9CA3AF" fontWeight="700" letterSpacing={1.5}>
-              NEXT VISIT
+              {t('next_visit')}
             </SizableText>
 
-            <Field label="Next Visit Date">
+            <Field label={t('next_visit_date')}>
               <DatePicker
                 value={nextVisitDate}
                 onDateChange={setNextVisitDate}
@@ -421,10 +426,10 @@ export default function AddContactScreen() {
             <XStack alignItems="center" justifyContent="space-between">
               <YStack gap="$1" flex={1}>
                 <SizableText size="$4" color="#F2F2F7" fontWeight="600">
-                  Enable Reminder
+                  {t('enable_reminder')}
                 </SizableText>
                 <SizableText size="$2" color="#9CA3AF">
-                  Get notified before the next visit
+                  {t('notify_before_next_visit')}
                 </SizableText>
               </YStack>
               <Switch
@@ -446,7 +451,7 @@ export default function AddContactScreen() {
             disabled={saving}
             marginTop="$2"
           >
-            {saving ? 'Saving…' : editId ? 'Update Contact' : 'Add Contact'}
+            {saving ? t('saving') : editId ? t('update_contact') : t('add_contact')}
           </Button>
         </YStack>
       </ScrollView>

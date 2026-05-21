@@ -4,8 +4,7 @@
 // ALL answers are grounded in provided JW source content —
 // the model is forbidden from using general AI knowledge.
 // ============================================================
-import { createClient, AsyncStorageAdapter } from '@blinkdotnew/sdk';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { generateAiText } from '@/services/localAiService';
 import type {
   UserProfile,
   DailyText,
@@ -15,15 +14,7 @@ import type {
   StudyWeek,
   SourceCitation,
 } from '../types';
-
-// -----------------------------------------------------------
-// Blink client (headless auth, AsyncStorage persistence)
-// -----------------------------------------------------------
-const blink = createClient({
-  projectId: process.env.EXPO_PUBLIC_BLINK_PROJECT_ID!,
-  auth: { mode: 'headless' },
-  storage: new AsyncStorageAdapter(AsyncStorage),
-});
+import { gatewayFetchSourcesForAi, normalizeAppLanguage } from '@/services/sourceGatewayService';
 
 // -----------------------------------------------------------
 // JW Sources Only system prompt
@@ -82,6 +73,21 @@ function sourcesBlock(retrievedContent: string): string {
   return `\n\n---\nJW SOURCE CONTENT (use ONLY this):\n${retrievedContent}\n---`;
 }
 
+async function ensureRetrievedContent(
+  retrievedContent: string,
+  sources: SourceCitation[],
+  language?: string
+): Promise<string> {
+  if (retrievedContent.trim() || !sources.some((source) => source.url)) return retrievedContent;
+  const lang = normalizeAppLanguage(language ? { symbol: language, code: language } : null);
+  const fetched = await gatewayFetchSourcesForAi(sources.map((source) => ({
+    title: source.title,
+    url: source.url,
+    snippet: source.publication || source.paragraph || source.scripture,
+  })), lang);
+  return fetched.content || retrievedContent;
+}
+
 // -----------------------------------------------------------
 // answerFromJWSources
 // -----------------------------------------------------------
@@ -97,18 +103,16 @@ export async function answerFromJWSources(
   language?: string
 ): Promise<GeneratedAnswer> {
   const langNote = language ? `\nUser's language preference: ${language}` : '';
+  const sourceContent = await ensureRetrievedContent(retrievedContent, sources, language);
 
   const prompt =
     `${JW_SYSTEM_PROMPT}${profileContext(profile)}${langNote}` +
-    sourcesBlock(retrievedContent) +
+    sourcesBlock(sourceContent) +
     `\n\nQUESTION: ${question}\n\n` +
     `${lengthInstruction('medium')} ${toneInstruction('natural')}\n` +
     `After your answer, append "Based on sources:" followed by the source titles.`;
 
-  const { text } = await blink.ai.generateText({
-    prompt,
-    model: 'google/gemini-2.5-flash',
-  });
+  const { text } = await generateAiText({ prompt });
 
   return {
     id: generateId(),
@@ -139,6 +143,7 @@ export async function generateMeetingAnswer(
   length: 'short' | 'medium' | 'long',
   tone: 'natural' | 'heartfelt' | 'scriptural'
 ): Promise<GeneratedAnswer> {
+  const sourceContent = await ensureRetrievedContent(retrievedContent, sources);
   const refsText = references.length
     ? `\nRelevant references: ${references.join(', ')}`
     : '';
@@ -148,16 +153,13 @@ export async function generateMeetingAnswer(
 
   const prompt =
     `${JW_SYSTEM_PROMPT}` +
-    sourcesBlock(retrievedContent) +
+    sourcesBlock(sourceContent) +
     `\n\nMEETING PART: "${partTitle}"${refsText}${questionsText}\n\n` +
     `Prepare a spoken answer for this meeting part.\n` +
     `${lengthInstruction(length)} ${toneInstruction(tone)}\n` +
     `End with: "Based on sources: [list source titles]"`;
 
-  const { text } = await blink.ai.generateText({
-    prompt,
-    model: 'google/gemini-2.5-flash',
-  });
+  const { text } = await generateAiText({ prompt });
 
   return {
     id: generateId(),
@@ -196,10 +198,7 @@ export async function generateWatchtowerAnswer(
     `${lengthInstruction(length)} ${toneInstruction(tone)}\n` +
     `End with: "Based on sources: [list source titles]"`;
 
-  const { text } = await blink.ai.generateText({
-    prompt,
-    model: 'google/gemini-2.5-flash',
-  });
+  const { text } = await generateAiText({ prompt });
 
   return {
     id: generateId(),
@@ -226,6 +225,7 @@ export async function generateMinistrySuggestion(
   retrievedContent: string,
   sources: SourceCitation[]
 ): Promise<GeneratedAnswer> {
+  const sourceContent = await ensureRetrievedContent(retrievedContent, sources);
   const history = contactInfo.visits.length
     ? `\nPrevious visits (${contactInfo.visits.length}):\n` +
       contactInfo.visits
@@ -244,7 +244,7 @@ export async function generateMinistrySuggestion(
 
   const prompt =
     `${JW_SYSTEM_PROMPT}` +
-    sourcesBlock(retrievedContent) +
+    sourcesBlock(sourceContent) +
     `\n\nMINISTRY CONTACT:\n` +
     `- Status: ${contactInfo.status}\n` +
     `- Name: ${contactInfo.name}${history}${topics}${questions}\n\n` +
@@ -253,10 +253,7 @@ export async function generateMinistrySuggestion(
     `${lengthInstruction('medium')} ${toneInstruction('natural')}\n` +
     `End with: "Based on sources: [list source titles]"`;
 
-  const { text } = await blink.ai.generateText({
-    prompt,
-    model: 'google/gemini-2.5-flash',
-  });
+  const { text } = await generateAiText({ prompt });
 
   return {
     id: generateId(),
@@ -284,9 +281,10 @@ export async function explainDailyText(
   sources: SourceCitation[],
   profile?: UserProfile
 ): Promise<GeneratedAnswer> {
+  const sourceContent = await ensureRetrievedContent(retrievedContent, sources, dailyText.language);
   const prompt =
     `${JW_SYSTEM_PROMPT}${profileContext(profile)}` +
-    sourcesBlock(retrievedContent) +
+    sourcesBlock(sourceContent) +
     `\n\nDAILY TEXT (${dailyText.date}):\n` +
     `Scripture: ${dailyText.scripture}\n` +
     `"${dailyText.scriptureText}"\n\n` +
@@ -296,10 +294,7 @@ export async function explainDailyText(
     `${lengthInstruction('medium')} ${toneInstruction('heartfelt')}\n` +
     `End with: "Based on sources: [list source titles]"`;
 
-  const { text } = await blink.ai.generateText({
-    prompt,
-    model: 'google/gemini-2.5-flash',
-  });
+  const { text } = await generateAiText({ prompt });
 
   return {
     id: generateId(),
@@ -355,10 +350,7 @@ export async function generateStudyPlan(
     `All jwSources and scriptures must come from the provided JW source content above.\n` +
     `Do NOT invent publication names or scripture references not present in the sources.`;
 
-  const { text } = await blink.ai.generateText({
-    prompt,
-    model: 'google/gemini-2.5-flash',
-  });
+  const { text } = await generateAiText({ prompt });
 
   // Parse JSON response
   let parsed: { title?: string; weeks?: Array<Partial<StudyWeek>> } = {};

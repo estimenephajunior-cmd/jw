@@ -25,19 +25,11 @@ import {
 } from '@blinkdotnew/mobile-ui';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient } from '@blinkdotnew/sdk';
 import type { MinistryContact } from './(tabs)/ministry';
+import { generateAiText } from '@/services/localAiService';
 
 // ─── Blink AI client (visual layer only — wired by backendDeveloper) ──────────
 
-let blinkClient: ReturnType<typeof createClient> | null = null;
-try {
-  const projectId = process.env.EXPO_PUBLIC_BLINK_PROJECT_ID;
-  const publishableKey = process.env.EXPO_PUBLIC_BLINK_PUBLISHABLE_KEY;
-  if (projectId && publishableKey) {
-    blinkClient = createClient({ projectId, publishableKey });
-  }
-} catch {}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -142,10 +134,6 @@ function AISuggestionsPanel({ contact }: { contact: MinistryContact }) {
   const [error, setError] = useState<string | null>(null);
 
   const handleGenerate = async () => {
-    if (!blinkClient) {
-      setError('AI not configured. Please set EXPO_PUBLIC_BLINK_PROJECT_ID and EXPO_PUBLIC_BLINK_PUBLISHABLE_KEY.');
-      return;
-    }
     setLoading(true);
     setError(null);
     try {
@@ -153,7 +141,7 @@ function AISuggestionsPanel({ contact }: { contact: MinistryContact }) {
       const scripturesList = contact.scripturesUsed.join(', ') || 'none yet';
       const pubList = contact.publicationsShared.join(', ') || 'none yet';
 
-      const result = await (blinkClient as any).ai.generateText({
+      const result = await generateAiText({
         system: `You are a JW Study Assistant helping a Jehovah's Witness prepare for their next visit with a bible student or return visit. Only suggest topics, scriptures, and materials from JW.org official sources (jw.org, Watchtower, Awake!, Bible Teach book, Enjoy Life Forever, etc.). Be practical, warm, and encouraging. Respond in structured JSON format with these keys: nextTopic (string), scripture (object with reference and text), jwOrgResource (object with title, type, and url), studyTip (string), conversationStarter (string).`,
         messages: [{
           role: 'user',

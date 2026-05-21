@@ -7,7 +7,8 @@ import {
 } from '@blinkdotnew/mobile-ui';
 import { ChevronLeft, Sparkles, Bookmark, Copy, RefreshCw } from '@blinkdotnew/mobile-ui';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient, AsyncStorageAdapter } from '@blinkdotnew/sdk';
+import { generateAiText } from '@/services/localAiService';
+import { saveSource } from '@/services/storageService';
 
 const PRIMARY = '#5B7E6B';
 const BG = '#1C1C1E';
@@ -16,12 +17,6 @@ const CARD_BORDER = '#3A3A3C';
 const TEXT_PRIMARY = '#F2F2F7';
 const TEXT_SECONDARY = '#9CA3AF';
 const PRIMARY_SUBTLE = 'rgba(91,126,107,0.15)';
-
-const blink = createClient({
-  projectId: process.env.EXPO_PUBLIC_BLINK_PROJECT_ID!,
-  auth: { mode: 'headless' },
-  storage: new AsyncStorageAdapter(AsyncStorage),
-});
 
 const JW_SYSTEM_PROMPT = `You are a JW Study Assistant. You ONLY help Jehovah's Witnesses with their ministry using JW.org and Watchtower sources.
 
@@ -63,8 +58,7 @@ export default function MinistryPrepScreen() {
         ? `Contact: ${contact.name}\nStatus: ${contact.status}\nTopics discussed: ${contact.topicsDiscussed?.join(', ') || 'None'}\nScriptures used: ${contact.scripturesUsed?.join(', ') || 'None'}\nPublications shared: ${contact.publicationsShared?.join(', ') || 'None'}\nQuestions asked: ${contact.questionsAsked?.join(', ') || 'None'}\nNotes: ${contact.notes?.join('; ') || 'None'}`
         : 'No specific contact selected. Give general ministry suggestions.';
 
-      const { text } = await blink.ai.generateText({
-        model: 'google/gemini-3-flash',
+      const { text } = await generateAiText({
         messages: [
           { role: 'system', content: JW_SYSTEM_PROMPT },
           {
@@ -93,10 +87,7 @@ export default function MinistryPrepScreen() {
         savedAt: new Date().toISOString(),
         syncStatus: 'saved',
       };
-      const raw = await AsyncStorage.getItem('jw_sa:saved_sources');
-      const sources = raw ? JSON.parse(raw) : [];
-      sources.unshift(saved);
-      await AsyncStorage.setItem('jw_sa:saved_sources', JSON.stringify(sources));
+      await saveSource(saved as any);
       toast('Saved', { message: 'Suggestion saved to library', variant: 'success' });
     } catch {
       toast('Error', { message: 'Could not save suggestion', variant: 'error' });
