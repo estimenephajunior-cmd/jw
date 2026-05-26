@@ -78,14 +78,18 @@ async function ensureRetrievedContent(
   sources: SourceCitation[],
   language?: string
 ): Promise<string> {
-  if (retrievedContent.trim() || !sources.some((source) => source.url)) return retrievedContent;
+  if (!sources.some((source) => source.url)) return retrievedContent;
   const lang = normalizeAppLanguage(language ? { symbol: language, code: language } : null);
-  const fetched = await gatewayFetchSourcesForAi(sources.map((source) => ({
-    title: source.title,
-    url: source.url,
-    snippet: source.publication || source.paragraph || source.scripture,
-  })), lang);
-  return fetched.content || retrievedContent;
+  try {
+    const fetched = await gatewayFetchSourcesForAi(sources.map((source) => ({
+      title: source.title,
+      url: source.url,
+      snippet: source.publication || source.paragraph || source.scripture,
+    })), lang);
+    return [retrievedContent, fetched.content].filter((item) => item.trim()).join('\n\n---\n\n');
+  } catch {
+    return retrievedContent;
+  }
 }
 
 // -----------------------------------------------------------
@@ -175,6 +179,61 @@ export async function generateMeetingAnswer(
 }
 
 // -----------------------------------------------------------
+// generateBibleReadingCoaching
+// -----------------------------------------------------------
+
+/**
+ * Generate coaching notes for the midweek Bible Reading assignment.
+ * This is not a meeting answer. It mentors the reader on delivery.
+ */
+export async function generateBibleReadingCoaching(
+  partTitle: string,
+  references: string[],
+  retrievedContent: string,
+  sources: SourceCitation[],
+  length: 'short' | 'medium' | 'long',
+  tone: 'natural' | 'heartfelt' | 'scriptural'
+): Promise<GeneratedAnswer> {
+  const sourceContent = await ensureRetrievedContent(retrievedContent, sources);
+  const refsText = references.length
+    ? `\nAssigned references and study lesson: ${references.join(', ')}`
+    : '';
+
+  const prompt =
+    `${JW_SYSTEM_PROMPT}` +
+    sourcesBlock(sourceContent) +
+    `\n\nMEETING PART: "${partTitle}"${refsText}\n\n` +
+    `This is the midweek Bible Reading assignment, usually section 3. Do NOT prepare a general comment or answer.\n` +
+    `Act as a kind reading coach. Use the assigned Bible passage and the ministry-school lesson/reference from the source content.\n\n` +
+    `Your task:\n` +
+    `1. Identify the main lesson/rule the student is working on based on.\n` +
+    `2. Select only a few specific verses or short phrases from the assigned reading where that lesson can be applied. Do not comment on every verse.\n` +
+    `3. For each selected verse/phrase, explain exactly HOW to read it: tone, pace, pause, emphasis, facial expression, gesture, warmth, empathy, confidence, or variation.\n` +
+    `4. Keep the guidance practical, like a mentor helping the user practice before the meeting.\n` +
+    `5. Use the same language as the assignment/source content.\n\n` +
+    `Format the answer with:\n` +
+    `- Reading goal\n` +
+    `- Practice points, each with verse/phrase + delivery advice\n` +
+    `- One short final rehearsal tip\n` +
+    `${lengthInstruction(length)} ${toneInstruction(tone)}\n` +
+    `End with: "Based on sources: [list source titles]"`;
+
+  const { text } = await generateAiText({ prompt });
+
+  return {
+    id: generateId(),
+    parentId: partTitle,
+    parentType: 'meeting-part',
+    length,
+    tone,
+    content: text,
+    sources,
+    createdAt: nowISO(),
+    saved: false,
+  };
+}
+
+// -----------------------------------------------------------
 // generateWatchtowerAnswer
 // -----------------------------------------------------------
 
@@ -194,7 +253,7 @@ export async function generateWatchtowerAnswer(
     `\n\nARTICLE CONTEXT:\n${articleContext}` +
     `\n\nPARAGRAPH TEXT:\n${paragraphText}` +
     `\n\nSTUDY QUESTION: ${question}\n\n` +
-    `Prepare a thoughtful answer for the Watchtower study.\n` +
+    `Prepare a thoughtful answer for the Watchtower study. If the question is an article review question, use the full article context to identify the paragraphs that answer it before writing. Do not answer generally when the article gives the answer.\n` +
     `${lengthInstruction(length)} ${toneInstruction(tone)}\n` +
     `End with: "Based on sources: [list source titles]"`;
 
@@ -405,6 +464,7 @@ export async function generateStudyPlan(
 export default {
   answerFromJWSources,
   generateMeetingAnswer,
+  generateBibleReadingCoaching,
   generateWatchtowerAnswer,
   generateMinistrySuggestion,
   explainDailyText,

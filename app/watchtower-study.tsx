@@ -74,6 +74,7 @@ interface ParagraphGroup {
   id: string;
   question: string;
   paragraphs: ParsedParagraph[];
+  kind?: 'paragraph' | 'review';
 }
 
 interface AudioMarker {
@@ -117,6 +118,17 @@ function stripHtml(html: string): string {
     .replace(/&#39;/g, "'")
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function htmlToLines(html: string): string[] {
+  return stripHtml(html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(?:p|li|h[1-6]|div)>/gi, '\n')
+    .replace(/<li\b[^>]*>/gi, '\n')
+  )
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
 }
 
 function absoluteWolAsset(src: string): string {
@@ -227,7 +239,7 @@ function extractQuestionsByPid(html: string): Record<string, string> {
   return questions;
 }
 
-function groupParagraphs(paragraphs: ParsedParagraph[]): ParagraphGroup[] {
+function groupParagraphs(paragraphs: ParsedParagraph[], reviewQuestions: string[] = []): ParagraphGroup[] {
   const groups: ParagraphGroup[] = [];
   for (const para of paragraphs) {
     const question = para.questions[0] ?? `Paragraph ${para.number}`;
@@ -235,10 +247,47 @@ function groupParagraphs(paragraphs: ParsedParagraph[]): ParagraphGroup[] {
     if (last && last.question === question) {
       last.paragraphs.push(para);
     } else {
-      groups.push({ id: `q-${para.number}`, question, paragraphs: [para] });
+      groups.push({ id: `q-${para.number}`, question, paragraphs: [para], kind: 'paragraph' });
     }
   }
+  reviewQuestions.forEach((question, index) => {
+    groups.push({
+      id: `review-${index}`,
+      question,
+      paragraphs: [],
+      kind: 'review',
+    });
+  });
   return groups;
+}
+
+function extractReviewQuestions(html: string, paragraphQuestions: string[]): string[] {
+  const paragraphSet = new Set(paragraphQuestions.map((q) => normalizeQuestion(q)));
+  const lines = htmlToLines(html).filter((line) => !/^your answer$/i.test(line));
+  const reviewQuestions: string[] = [];
+  let prefix = '';
+
+  for (const line of lines) {
+    const normalized = normalizeQuestion(line);
+    if (!line || paragraphSet.has(normalized)) continue;
+    if (/\.\s*\.\s*\.$/.test(line) || /\bby\s*\.\s*\.\s*\.$/i.test(line)) {
+      prefix = line;
+      continue;
+    }
+    if (prefix && /\?$/.test(line)) {
+      reviewQuestions.push(`${prefix}\n${line}`);
+      continue;
+    }
+    if (/^(?:how can you|ki jan|comment|cómo)\b/i.test(line) && /\?$/.test(line) && !paragraphSet.has(normalized)) {
+      reviewQuestions.push(line);
+    }
+  }
+
+  return Array.from(new Set(reviewQuestions)).slice(0, 6);
+}
+
+function normalizeQuestion(question: string): string {
+  return question.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function parseTimeToSeconds(value: string): number {
@@ -312,7 +361,14 @@ interface ParagraphCardProps {
 function ParagraphCard({ group, activePid, onPrepare, onReference }: ParagraphCardProps) {
   const colors = usePremiumTheme();
   const combinedText = group.paragraphs.map((p) => p.text).join('\n\n');
-  const firstPara = { ...group.paragraphs[0], text: combinedText };
+  const firstPara = group.paragraphs[0]
+    ? { ...group.paragraphs[0], text: combinedText }
+    : {
+        id: group.id,
+        number: 0,
+        text: '',
+        questions: [group.question],
+      };
   const isActive = group.paragraphs.some((p) => p.dataPid === activePid);
   return (
     <Card
@@ -404,20 +460,6 @@ function ParagraphCard({ group, activePid, onPrepare, onReference }: ParagraphCa
       >
         Prepare Answer
       </Button>
-      {group.paragraphs.length === 0 && (
-        <Button
-          size="$2"
-          backgroundColor="rgba(91,126,107,0.08)"
-          borderColor="#3A3A3C"
-          borderWidth={1}
-          color="#6B7280"
-          alignSelf="flex-start"
-          icon={<Zap size={12} color="#6B7280" />}
-          onPress={() => onPrepare(firstPara, group.question)}
-        >
-          Prepare Comment
-        </Button>
-      )}
     </Card>
   );
 }
@@ -429,9 +471,10 @@ interface AnswerSheetProps {
   paragraph: ParsedParagraph | null;
   question: string;
   articleTitle: string;
+  articleContext: string;
   onSave: (answer: GeneratedAnswer, para: ParsedParagraph) => Promise<void>;
 }
-function AnswerSheet({ open, onClose, paragraph, question, articleTitle, onSave }: AnswerSheetProps) {
+function AnswerSheet({ open, onClose, paragraph, question, articleTitle, articleContext, onSave }: AnswerSheetProps) {
   const appLanguage = useAppStore((s) => s.appLanguage);
   const language = useAppStore((s) => s.language);
   const t = createTranslator(appLanguage?.symbol || language?.symbol || 'en');
@@ -452,9 +495,9 @@ function AnswerSheet({ open, onClose, paragraph, question, articleTitle, onSave 
     setSaved(false);
     try {
       const result = await generateWatchtowerAnswer(
-        paragraph.text,
+        paragraph.text || articleContext,
         question || `What is the main point of paragraph ${paragraph.number}?`,
-        articleTitle,
+        `${articleTitle}\n\nFULL ARTICLE CONTEXT:\n${articleContext}`,
         [],
         length,
         tone,
@@ -522,7 +565,7 @@ function AnswerSheet({ open, onClose, paragraph, question, articleTitle, onSave 
             ) : null}
 
             {/* Paragraph preview */}
-            {paragraph && (
+            {paragraph && paragraph.number > 0 && (
               <YStack
                 backgroundColor="#2C2C2E"
                 borderRadius="$3"
@@ -718,7 +761,9 @@ export default function WatchtowerStudyScreen() {
   const wolLangParam = selectedLanguage?.wolLangParam ?? 'lp-e';
 
   const [paragraphs, setParagraphs] = useState<ParsedParagraph[]>([]);
-  const paragraphGroups = groupParagraphs(paragraphs);
+  const [reviewQuestions, setReviewQuestions] = useState<string[]>([]);
+  const [articleContext, setArticleContext] = useState('');
+  const paragraphGroups = groupParagraphs(paragraphs, reviewQuestions);
   const [articleTitle, setArticleTitle] = useState('Watchtower Study');
   const [themeScripture, setThemeScripture] = useState('');
   const [studyDates, setStudyDates] = useState('');
@@ -787,6 +832,11 @@ export default function WatchtowerStudyScreen() {
 
       const parsed = parseParagraphs(html);
       setParagraphs(parsed);
+      const fullArticleText = parsed
+        .map((p) => `Paragraph ${p.number}: ${p.text}`)
+        .join('\n\n');
+      setArticleContext(fullArticleText);
+      setReviewQuestions(extractReviewQuestions(html, parsed.flatMap((p) => p.questions)));
 
       // Set study dates
       const now = new Date();
@@ -909,7 +959,7 @@ export default function WatchtowerStudyScreen() {
     const source = {
       id: `wt_ans_${answer.id}`,
       type: 'answer' as const,
-      title: `WT Answer: ¶${para.number} — ${articleTitle}`,
+      title: para.number ? `WT Answer: ¶${para.number} - ${articleTitle}` : `WT Review Answer - ${articleTitle}`,
       content: answer.content,
       language: langCode,
       savedAt: new Date().toISOString(),
@@ -1030,6 +1080,7 @@ export default function WatchtowerStudyScreen() {
         paragraph={activeParagraph}
         question={activeQuestion}
         articleTitle={articleTitle}
+        articleContext={articleContext}
         onSave={handleSaveAnswer}
       />
       <ReferenceSheet

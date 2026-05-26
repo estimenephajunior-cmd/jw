@@ -235,6 +235,7 @@ function parseMeetingArticleParts(html: string, workbookUrl: string): MeetingPar
       .filter((item) => item.type === 'image')
       .map((item) => ({ url: item.url, alt: item.alt }));
     const images = tokenImages.length ? tokenImages : imagesFromHtml(detailHtml);
+    if (isNonPreparableMeetingPart(cleanTitle, structured.text, section)) return;
     parts.push({
       id: `part-${parts.length}`,
       section,
@@ -255,6 +256,41 @@ function parseMeetingArticleParts(html: string, workbookUrl: string): MeetingPar
   });
 
   return parts;
+}
+
+function isNonPreparableMeetingPart(title: string, detailText: string, section: MeetingPart['section']): boolean {
+  const text = `${title} ${detailText}`.replace(/\s+/g, ' ').trim();
+  const normalized = normalizeForProgramMatch(text);
+  const normalizedTitle = normalizeForProgramMatch(title);
+  if (section === 'opening' || section === 'closing') return true;
+  if (/^(?:song|cantique|kantik|cántico)\s+\d+\s*(?:\|\s*)?$/i.test(title.trim())) return true;
+  if (isLocalNeedsText(normalizedTitle) || isLocalNeedsText(normalized)) return true;
+  if (/(^|\b)(song|cantique|kantik|cántico)\s+\d+/i.test(text)
+    && /(prayer|prière|priyè|oración|opening comments|pawòl entwodiksyon|concluding comments|pawòl konklizyon)/i.test(text)) {
+    return true;
+  }
+  if (/^(?:song|cantique|kantik|cántico)\s+\d+(?:\s+(?:song|cantique|kantik|cántico)\s+\d+)?\s*$/i.test(text)) return true;
+  if (section === 'living' && normalizedTitle.length <= 40 && !/[?]/.test(title) && isLikelyUnpreparedAdminSlot(normalizedTitle)) return true;
+  return false;
+}
+
+function normalizeForProgramMatch(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’']/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isLocalNeedsText(value: string): boolean {
+  return /\b(local needs|congregation needs|needs of the congregation|besoins locaux|besoin locaux|besoins de lassemblee|besoins de la congregation|bezwen kongregasyon an|bezwen kongregasyon|bezwen lokal|necesidades locales|necesidades de la congregacion|necessidades locais|necessidades da congregacao)\b/i.test(value);
+}
+
+function isLikelyUnpreparedAdminSlot(value: string): boolean {
+  return /\b(needs?|besoins?|bezwen|necesidades?|necessidades?)\b/i.test(value)
+    && /\b(local|congregation|assemblee|kongregasyon|congregacion|congregacao)\b/i.test(value);
 }
 
 function findMidweekArticleUrl(hubHtml: string, lang: { symbol: string; wolRegion: string; wolLangParam: string }): string | null {
@@ -334,13 +370,11 @@ function parseMeetingParts(html: string): MeetingPart[] {
 
   // Fallback: if no headings parsed, produce a generic structure
   if (parts.length === 0) {
-    const fallback: MeetingPart['section'][] = ['opening', 'treasures', 'ministry', 'living', 'closing'];
+    const fallback: MeetingPart['section'][] = ['treasures', 'ministry', 'living'];
     const titles = [
-      'Opening Song & Prayer',
       'Treasures From God\'s Word',
       'Apply Yourself to the Field Ministry',
       'Living as Christians',
-      'Closing Song & Prayer',
     ];
     titles.forEach((t, i) => {
       parts.push({
@@ -553,14 +587,12 @@ export default function MeetingsScreen() {
       setError(err?.message ?? 'unknown');
       // Show fallback structure
       setMeetingData([
-        { id: 'f0', section: 'opening', title: 'Opening Song & Prayer', icon: '🎵' },
         { id: 'f1', section: 'treasures', title: 'Treasures From God\'s Word (10 min)', time: '10 min', icon: '💎' },
         { id: 'f2', section: 'treasures', title: 'Spiritual Gems (10 min)', time: '10 min', icon: '💡' },
         { id: 'f3', section: 'treasures', title: 'Bible Reading (4 min)', time: '4 min', icon: '📖' },
         { id: 'f4', section: 'ministry', title: 'Apply Yourself to the Field Ministry', icon: '📋' },
         { id: 'f5', section: 'living', title: 'Living as Christians', icon: '❤️' },
         { id: 'f6', section: 'living', title: 'Congregation Bible Study', icon: '📚' },
-        { id: 'f7', section: 'closing', title: 'Closing Song & Prayer', icon: '🙏' },
       ]);
     } finally {
       setLoading(false);

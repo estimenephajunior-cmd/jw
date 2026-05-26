@@ -33,7 +33,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Clipboard } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAppStore } from '@/store/appStore';
-import { generateMeetingAnswer } from '@/services/aiRetrievalService';
+import { generateBibleReadingCoaching, generateMeetingAnswer } from '@/services/aiRetrievalService';
 import { saveSource } from '@/services/storageService';
 import { safeBack } from '@/services/navigationService';
 import {
@@ -283,6 +283,15 @@ function ReferenceSheet({
   );
 }
 
+function isBibleReadingPart(title: string, references: WolReference[]): boolean {
+  const normalized = title
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return /\b(bible reading|lekti labib|lecture de la bible|lectura de la biblia)\b/.test(normalized)
+    || (/\b3\.?\s/.test(normalized) && references.some((ref) => ref.kind === 'bible') && references.some((ref) => /\b(?:th|be|leson|lesson|leccion|leçon)\b/i.test(ref.text)));
+}
+
 // ── Answer display card ───────────────────────────────────────
 interface AnswerCardProps {
   answer: GeneratedAnswer;
@@ -475,23 +484,50 @@ export default function MeetingPrepScreen() {
     setIsGenerating(true);
     setAnswerSaved(false);
     try {
+      const resolvedReferences = await Promise.all(
+        references.map((ref) =>
+          gatewayResolveReference(ref, contentLanguage)
+            .then((result) => ({
+              title: ref.text,
+              url: ref.href,
+              content: result.data.exactText || result.data.content,
+            }))
+            .catch(() => ({
+              title: ref.text,
+              url: ref.href,
+              content: '',
+            }))
+        )
+      );
       const retrievedContent = [
         partData.detailHtml ? stripHtml(partData.detailHtml) : '',
         videoCaptions ? `Video captions for ${videoSource?.title || partTitle}:\n${videoCaptions}` : '',
-        ...references.map((ref) => `${ref.text}: ${ref.href}`),
+        ...resolvedReferences.map((ref) => ref.content
+          ? `Reference: ${ref.title}\nURL: ${ref.url}\n${ref.content}`
+          : `Reference: ${ref.title}\nURL: ${ref.url}`),
       ].filter(Boolean).join('\n\n');
-      const answer = await generateMeetingAnswer(
-        partTitle,
-        questions,
-        references.map((ref) => ref.text),
-        retrievedContent,
-        [
-          ...references.map((ref) => ({ title: ref.text, url: ref.href })),
-          ...(videoSource ? [{ title: videoSource.title || 'Meeting video captions', url: videoSource.sourceUrl || videoSource.url }] : []),
-        ],
-        length,
-        t,
-      );
+      const sourceCitations = [
+        ...resolvedReferences.map((ref) => ({ title: ref.title, url: ref.url })),
+        ...(videoSource ? [{ title: videoSource.title || 'Meeting video captions', url: videoSource.sourceUrl || videoSource.url }] : []),
+      ];
+      const answer = isBibleReadingPart(partTitle, references)
+        ? await generateBibleReadingCoaching(
+            partTitle,
+            references.map((ref) => ref.text),
+            retrievedContent,
+            sourceCitations,
+            length,
+            t,
+          )
+        : await generateMeetingAnswer(
+            partTitle,
+            questions,
+            references.map((ref) => ref.text),
+            retrievedContent,
+            sourceCitations,
+            length,
+            t,
+          );
       setGeneratedAnswer(answer);
     } catch (err) {
       toast('Generation failed', {
@@ -501,7 +537,7 @@ export default function MeetingPrepScreen() {
     } finally {
       setIsGenerating(false);
     }
-  }, [partData.detailHtml, partTitle, questions, references, videoCaptions, videoSource]);
+  }, [partData.detailHtml, partTitle, questions, references, videoCaptions, videoSource, contentLanguage]);
 
   const handleRefine = async (overrideLength?: AnswerLength, overrideTone?: AnswerTone) => {
     const l = overrideLength ?? answerLength;

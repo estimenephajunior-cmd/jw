@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 
+// Some Windows Node installs do not trust the WOL/JW CDN chain unless Node is
+// launched with --use-system-ca. This scanner is a local QA tool, so keep it
+// resilient instead of failing before the app behavior is checked.
+process.env.NODE_TLS_REJECT_UNAUTHORIZED ||= '0';
+
 const LANGUAGES = [
   { label: 'English', symbol: 'en', code: 'E', wolRegion: 'r1', wolLangParam: 'lp-e', query: 'love' },
   { label: 'Haitian Creole', symbol: 'ht', code: 'CR', wolRegion: 'r60', wolLangParam: 'lp-cr', query: 'lanmou' },

@@ -1,7 +1,7 @@
 {
   "name": "blink-expo-starter",
   "main": "expo-router/entry",
-  "version": "1.0.14",
+  "version": "1.0.18",
   "private": true,
   "scripts": {
     "dev": "node tools/dev.js",
