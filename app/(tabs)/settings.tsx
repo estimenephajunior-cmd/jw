@@ -516,7 +516,7 @@ export default function SettingsScreen() {
               />
               <YStack paddingHorizontal="$4" paddingVertical="$3" gap="$2">
                 <SizableText size="$2" color="#6B7280">{t('app_version')}</SizableText>
-                <SizableText size="$4" color="#9CA3AF">1.0.18</SizableText>
+                <SizableText size="$4" color="#9CA3AF">1.0.19</SizableText>
               </YStack>
               <Separator borderColor="#3A3A3C" />
               <XStack paddingHorizontal="$4" paddingVertical="$3" gap="$2">
