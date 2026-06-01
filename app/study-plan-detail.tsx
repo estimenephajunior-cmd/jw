@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { FlatList, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -24,9 +24,9 @@ import {
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { StudyPlan, StudyWeek } from './(tabs)/study';
-import { generateAiText } from '@/services/localAiService';
-
-// ─── AI Client ────────────────────────────────────────────────────────────────
+import { generateWeekStudyGuide } from '@/services/aiRetrievalService';
+import { normalizeAppLanguage } from '@/services/sourceGatewayService';
+import { useAppStore } from '@/store/appStore';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -36,45 +36,22 @@ const TYPE_CONFIG = {
   annual:  { label: 'Annual',  color: '#5B7E6B', bg: 'rgba(91,126,107,0.15)' },
 };
 
-// ─── AI Week Guide ────────────────────────────────────────────────────────────
-
-interface WeekGuide {
-  keyPoints: string[];
-  suggestedScriptures: string[];
-  discussionQuestions: string[];
-  personalApplication: string;
-  jwSource: string;
-}
-
-async function generateWeekGuide(week: StudyWeek): Promise<WeekGuide> {
-  const result = await generateAiText({
-    system: `You are a JW Study Assistant. Generate a study guide for a personal study session based on a topic from JW.org materials. Only reference official Jehovah's Witnesses publications and scriptures. Respond in JSON with keys: keyPoints (string[]), suggestedScriptures (string[]), discussionQuestions (string[]), personalApplication (string), jwSource (string).`,
-    messages: [{
-      role: 'user',
-      content: `Generate a study guide for Week ${week.weekNumber}: "${week.topic}". Include key points from JW.org, scriptures, discussion questions, and a personal application point.`,
-    }],
-  });
-
-  const jsonMatch = result.text?.match(/```(?:json)?\n?([\s\S]*?)\n?```/) ||
-                    result.text?.match(/\{[\s\S]*\}/);
-  const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : result.text;
-  return JSON.parse(jsonStr);
-}
-
 // ─── Week Card ────────────────────────────────────────────────────────────────
 
 function WeekCard({
   week,
+  languageSymbol,
   onToggleComplete,
   onSaveNotes,
 }: {
   week: StudyWeek;
+  languageSymbol: string;
   onToggleComplete: (weekNumber: number) => void;
   onSaveNotes: (weekNumber: number, notes: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [notes, setNotes] = useState(week.notes ?? '');
-  const [guide, setGuide] = useState<WeekGuide | null>(null);
+  const [guide, setGuide] = useState<Awaited<ReturnType<typeof generateWeekStudyGuide>> | null>(null);
   const [loadingGuide, setLoadingGuide] = useState(false);
   const [guideError, setGuideError] = useState<string | null>(null);
 
@@ -82,7 +59,7 @@ function WeekCard({
     setLoadingGuide(true);
     setGuideError(null);
     try {
-      const g = await generateWeekGuide(week);
+      const g = await generateWeekStudyGuide(week.weekNumber, week.topic, languageSymbol);
       setGuide(g);
     } catch (err: any) {
       setGuideError(err?.message ?? 'Could not generate guide.');
@@ -390,6 +367,8 @@ export default function StudyPlanDetailScreen() {
   const { planId } = useLocalSearchParams<{ planId: string }>();
   const [plan, setPlan] = useState<StudyPlan | null>(null);
   const [loading, setLoading] = useState(true);
+  const rawContentLanguage = useAppStore((s) => s.contentLanguage || s.language);
+  const contentLanguage = useMemo(() => normalizeAppLanguage(rawContentLanguage), [rawContentLanguage]);
 
   useFocusEffect(useCallback(() => {
     const load = async () => {
@@ -553,6 +532,7 @@ export default function StudyPlanDetailScreen() {
         renderItem={({ item }) => (
           <WeekCard
             week={item}
+            languageSymbol={contentLanguage.symbol}
             onToggleComplete={handleToggleComplete}
             onSaveNotes={handleSaveNotes}
           />

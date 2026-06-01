@@ -27,7 +27,7 @@ import {
   Plus,
   toast,
 } from '@blinkdotnew/mobile-ui';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useAppStore } from '@/store/appStore';
 import { translate } from '@/services/i18nService';
 import { fetchWolReferencePreview, type WolPreview, type WolReference } from '@/services/wolReferenceService';
@@ -40,7 +40,15 @@ import {
 import { saveSource } from '@/services/storageService';
 import { generateAiText } from '@/services/localAiService';
 import { usePremiumTheme } from '@/hooks/usePremiumTheme';
-import { AppHeader, AppScreen, EmptyState, GradientButton, LoadingState, PremiumBadge, PremiumCard, PreviewModal, SearchBar } from '@/components/premium';
+import { AppHeader, AppScreen, EmptyState, GradientButton, LoadingState, PremiumBadge, PremiumCard, PreviewModal, SearchBar, SuggestionChip } from '@/components/premium';
+
+const STUDY_SUGGESTION_KEYS = [
+  'suggestion_faith',
+  'suggestion_marriage',
+  'suggestion_prophecy',
+  'suggestion_meetings',
+  'suggestion_bible_verses',
+] as const;
 
 interface SearchResult {
   id: string;
@@ -160,7 +168,7 @@ function ResultCard({ item, onSave, onPreview, displaySymbol }: {
 export default function SearchScreen() {
   const router = useRouter();
   const colors = usePremiumTheme();
-  const params = useLocalSearchParams<{ query?: string; aiMode?: string }>();
+  const params = useLocalSearchParams<{ query?: string; aiMode?: string; t?: string }>();
 
   const appLanguage = useAppStore((s) => s.appLanguage);
   const rawContentLanguage = useAppStore((s) => s.contentLanguage || s.language);
@@ -175,7 +183,7 @@ export default function SearchScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [corsBlocked, setCorsBlocked] = useState(false);
-  const [aiMode, setAiMode] = useState(false);
+  const [aiMode, setAiMode] = useState(() => params.aiMode === 'true');
   const [aiAnswer, setAiAnswer] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSources, setAiSources] = useState<SearchResult[]>([]);
@@ -342,55 +350,88 @@ export default function SearchScreen() {
 
 
 
-  // Robustly sync search input and auto-search with navigation params
-  const prevNavQueryRef = useRef<string | undefined>(undefined);
-  const navQuery = typeof params.query === 'string' ? params.query.trim() : '';
-  const navAiMode = params.aiMode === 'true';
-  useEffect(() => {
-    if (navQuery && navQuery !== prevNavQueryRef.current) {
-      prevNavQueryRef.current = navQuery;
+  const prevNavSignatureRef = useRef<string>('');
+
+  const applyNavigationParams = useCallback(() => {
+    const navQuery = typeof params.query === 'string' ? params.query.trim() : '';
+    const navAiMode = params.aiMode === 'true';
+    const navPlainSearch = params.aiMode === 'false';
+    const signature = `${navQuery}|${params.aiMode ?? ''}|${params.t ?? ''}`;
+
+    if (signature === prevNavSignatureRef.current) return;
+    prevNavSignatureRef.current = signature;
+
+    if (navPlainSearch) {
+      setAiMode(false);
+    } else if (navAiMode) {
+      setAiMode(true);
+    }
+
+    if (navQuery) {
       setQuery(navQuery);
-      setAiMode(navAiMode);
       setHasSearched(true);
       handleSearch(navQuery, navAiMode);
+    } else if (navAiMode) {
+      setHasSearched(false);
+      setResults([]);
+      setAiAnswer(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navQuery, navAiMode, handleSearch]);
+  }, [params.query, params.aiMode, handleSearch]);
+
+  useFocusEffect(
+    useCallback(() => {
+      applyNavigationParams();
+    }, [applyNavigationParams])
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-      <YStack flex={1}>
-        <YStack padding="$5" paddingBottom="$3" gap="$4">
-          <XStack alignItems="center" justifyContent="space-between">
-            <YStack gap="$1">
-              <H2 color={colors.text}>{translate(displaySymbol, 'search')}</H2>
-              <SizableText size="$3" color={colors.textMuted}>
-                {translate(displaySymbol, 'search_jw_sources')}
-              </SizableText>
-            </YStack>
-            <Languages size={22} color={colors.textMuted} />
-          </XStack>
-          <XStack gap="$2" alignItems="center">
+    <AppScreen scroll={false} padded={false}>
+      <YStack flex={1} width="100%">
+        <YStack padding="$5" paddingBottom="$3" gap="$4" width="100%">
+          <AppHeader
+            title={translate(displaySymbol, aiMode ? 'ai_research_mode' : 'find_sources')}
+            subtitle={translate(displaySymbol, aiMode ? 'ask_ai_sources_hint' : 'search_jw_sources_hint')}
+            right={<Languages size={22} color={colors.textMuted} />}
+            eyebrow={aiMode ? translate(displaySymbol, 'quick_ai_ask') : undefined}
+          />
+          <XStack gap="$2" alignItems="center" width="100%">
             <YStack flex={1}>
               <SearchBar
+                large
                 value={query}
                 onChangeText={setQuery}
-                placeholder={translate(displaySymbol, 'search_jw_sources')}
+                placeholder={translate(
+                  displaySymbol,
+                  aiMode ? 'ask_jw_sources_placeholder' : 'search_study_prompt'
+                )}
+                onSubmitEditing={() => handleSearch()}
               />
             </YStack>
-            <Button
-              backgroundColor={colors.primaryDeep}
-              color="white"
-              borderRadius="$6"
-              onPress={() => handleSearch()}
-              disabled={!query.trim() || loading}
-              icon={loading ? <Spinner size="small" color="white" /> : <Search size={16} color="white" />}
-              minWidth={70}
-            >
-              {loading ? '' : translate(displaySymbol, 'go')}
-            </Button>
+            <YStack minWidth={88} maxWidth={110}>
+              <GradientButton onPress={() => handleSearch()} disabled={!query.trim() || loading} variant="royal">
+                {loading ? '…' : translate(displaySymbol, 'go')}
+              </GradientButton>
+            </YStack>
           </XStack>
+          {!hasSearched && !loading ? (
+            <YStack gap="$3" width="100%">
+              <XStack flexWrap="wrap" gap="$2">
+                {STUDY_SUGGESTION_KEYS.map((key) => (
+                  <SuggestionChip
+                    key={key}
+                    label={translate(displaySymbol, key)}
+                    onPress={() => {
+                      const q = translate(displaySymbol, key);
+                      setQuery(q);
+                      handleSearch(q, aiMode);
+                    }}
+                    active={false}
+                  />
+                ))}
+              </XStack>
+            </YStack>
+          ) : null}
           {suggestions.length > 0 && (
             <YStack gap="$2">
               {suggestions.map((item) => (
@@ -754,7 +795,7 @@ export default function SearchScreen() {
           </XStack>
         </YStack>
       </PreviewModal>
-    </SafeAreaView>
+    </AppScreen>
   );
 }
 

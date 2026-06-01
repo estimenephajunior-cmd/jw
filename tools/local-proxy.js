@@ -27,11 +27,6 @@ const server = http.createServer((req, res) => {
   }
 
   const requestUrl = new URL(req.url || '/', `http://localhost:${PORT}`);
-  if (requestUrl.pathname === '/ollama') {
-    proxyOllama(req, res);
-    return;
-  }
-
   if (requestUrl.pathname !== '/proxy') {
     send(res, 404, 'Not found');
     return;
@@ -113,47 +108,6 @@ function proxyTarget(target, req, res, redirects) {
     }
   });
   upstream.end();
-}
-
-function proxyOllama(req, res) {
-  if (req.method !== 'POST') {
-    send(res, 405, 'Method not allowed');
-    return;
-  }
-
-  const chunks = [];
-  req.on('data', (chunk) => chunks.push(chunk));
-  req.on('end', () => {
-    const body = Buffer.concat(chunks);
-    const upstream = http.request(
-      {
-        protocol: 'http:',
-        hostname: '127.0.0.1',
-        port: 11434,
-        path: '/api/generate',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': body.length,
-        },
-      },
-      (upstreamRes) => {
-        res.writeHead(upstreamRes.statusCode || 200, {
-          ...upstreamRes.headers,
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET,HEAD,POST,OPTIONS',
-          'Access-Control-Allow-Headers': 'Accept,Accept-Language,Content-Type,Range',
-        });
-        upstreamRes.pipe(res);
-      },
-    );
-    upstream.setTimeout(120000, () => upstream.destroy(new Error('Ollama timeout')));
-    upstream.on('error', (error) => {
-      if (!res.headersSent) send(res, 502, `Ollama unavailable: ${error.message}`);
-      else res.destroy(error);
-    });
-    upstream.end(body);
-  });
 }
 
 server.on('error', (error) => {

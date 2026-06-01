@@ -51,7 +51,9 @@ import {
 } from '@/services/sourceGatewayService';
 import type { GeneratedAnswer } from '@/types';
 import { usePremiumTheme } from '@/hooks/usePremiumTheme';
-import { PreviewModal } from '@/components/premium';
+import { PreviewModal, PremiumCard, GradientButton } from '@/components/premium';
+import { WolContentTokens, ReferenceChip } from '@/components/wolContent';
+import { createTranslator } from '@/services/i18nService';
 
 // ── Types ─────────────────────────────────────────────────────
 type AnswerLength = 'short' | 'medium' | 'long';
@@ -134,103 +136,6 @@ function asReference(token: WolReferenceToken): WolReference | null {
   };
 }
 
-function InlineTokens({
-  tokens,
-  onReference,
-  videoUrl,
-  videoSource,
-}: {
-  tokens: WolReferenceToken[];
-  onReference: (ref: WolReference) => void;
-  videoUrl?: string | null;
-  videoSource?: ResolvedVideoSource | null;
-}) {
-  return (
-    <XStack flexWrap="wrap" gap="$1" alignItems="baseline">
-      {tokens.map((token, index) => {
-        const ref = asReference(token);
-        if (token.kind === 'image' && token.src) {
-          return (
-            <YStack key={index} width="100%" paddingVertical="$2">
-              <Image
-                source={{ uri: token.src }}
-                style={{ width: '100%', aspectRatio: 16 / 9, borderRadius: 10, backgroundColor: '#111' }}
-                contentFit="contain"
-                transition={150}
-              />
-            </YStack>
-          );
-        }
-        if (token.kind === 'video') {
-          const targetUrl = token.href || videoUrl;
-          if (!targetUrl) return null;
-          if (videoUrl) {
-            return (
-              <YStack key={index} width="100%" gap="$2" paddingVertical="$2">
-                <SizableText size="$3" color="#78B58A" fontWeight="700">{videoSource?.title || token.text}</SizableText>
-                {React.createElement('video', {
-                  src: videoUrl,
-                  controls: true,
-                  poster: videoSource?.poster,
-                  style: { width: '100%', borderRadius: 10, backgroundColor: '#111' },
-                  playsInline: true,
-                }, videoSource?.subtitles
-                  ? React.createElement('track', {
-                      kind: 'subtitles',
-                      src: videoSource.subtitles,
-                      srcLang: 'en',
-                      label: 'Captions',
-                      default: true,
-                    })
-                  : null)}
-              </YStack>
-            );
-          }
-          return (
-            <Button
-              key={index}
-              size="$3"
-              backgroundColor="rgba(91,126,107,0.15)"
-              borderColor="rgba(91,126,107,0.3)"
-              borderWidth={1}
-              color="#78B58A"
-              onPress={() => Linking.openURL(targetUrl).catch(() => {})}
-              icon={<Video size={14} color="#78B58A" />}
-            >
-              {token.text}
-            </Button>
-          );
-        }
-        if (!ref) {
-          return (
-            <SizableText
-              key={index}
-              size="$3"
-              color="#D1D5DB"
-              lineHeight={22}
-              width={token.text.includes('\n') ? '100%' : undefined}
-            >
-              {token.text}
-            </SizableText>
-          );
-        }
-        return (
-          <SizableText
-            key={index}
-            size="$3"
-            color={ref.kind === 'bible' ? '#78B58A' : '#8DB4E2'}
-            lineHeight={22}
-            textDecorationLine="underline"
-            onPress={() => onReference(ref)}
-          >
-            {token.text}
-          </SizableText>
-        );
-      })}
-    </XStack>
-  );
-}
-
 function ReferenceSheet({
   open,
   onClose,
@@ -258,27 +163,25 @@ function ReferenceSheet({
       .finally(() => setLoading(false));
   }, [open, reference]);
 
+  const displayTitle = preview?.title && preview.title !== reference?.text ? preview.title : reference?.text;
+
   return (
-    <PreviewModal open={open} onClose={onClose} label={reference?.kind === 'bible' ? 'Bible verse' : 'Publication'} title={reference?.text} loading={loading}>
-            {loading ? (
-              <XStack gap="$2" alignItems="center">
-                <Spinner size="small" color={colors.primary} />
-                <SizableText color={colors.textMuted}>Loading reference...</SizableText>
-              </XStack>
-            ) : error ? (
-              <SizableText color={colors.danger}>{error}</SizableText>
-            ) : preview ? (
-              <YStack gap="$3">
-                {preview.title && preview.title !== reference?.text ? (
-                  <SizableText size="$4" color={colors.textSoft} fontWeight="800">{preview.title}</SizableText>
-                ) : null}
-                {preview.tokens?.length ? (
-                  <InlineTokens tokens={preview.tokens} onReference={onReference} />
-                ) : (
-                  <SizableText size="$4" color={colors.text} lineHeight={26}>{preview.content}</SizableText>
-                )}
-              </YStack>
-            ) : null}
+    <PreviewModal
+      open={open}
+      onClose={onClose}
+      label={reference?.kind === 'bible' ? 'Scripture' : 'Publication'}
+      title={displayTitle}
+      loading={loading}
+      loadingLabel="Loading…"
+      previewTokens={preview?.tokens}
+      onReference={onReference}
+    >
+      {error ? <SizableText color={colors.danger}>{error}</SizableText> : null}
+      {!preview?.tokens?.length && preview?.content ? (
+        <SizableText color={colors.text} fontSize={17} lineHeight={28}>
+          {preview.content}
+        </SizableText>
+      ) : null}
     </PreviewModal>
   );
 }
@@ -308,23 +211,24 @@ function AnswerCard({
   answer, onShorter, onWarmer, onMoreScriptural, onAlternative,
   onSave, onCopy, isSaving, saved,
 }: AnswerCardProps) {
+  const colors = usePremiumTheme();
   return (
     <Card
-      backgroundColor="#2C2C2E"
-      borderRadius="$4"
+      backgroundColor={colors.surface}
+      borderRadius="$6"
       padding="$4"
       borderWidth={1}
-      borderColor="rgba(91,126,107,0.3)"
+      borderColor={colors.border}
       gap="$4"
     >
-      {/* Answer label */}
       <XStack gap="$2" alignItems="center">
-        <Zap size={14} color="#5B7E6B" />
-        <SizableText size="$2" color="#5B7E6B" fontWeight="700" letterSpacing={1}>AI ANSWER</SizableText>
+        <Zap size={14} color={colors.gold} />
+        <SizableText size="$2" color={colors.gold} fontWeight="700" letterSpacing={1}>
+          AI
+        </SizableText>
       </XStack>
 
-      {/* Answer text */}
-      <SizableText size="$4" color="#F2F2F7" lineHeight={24}>
+      <SizableText size="$4" color={colors.text} lineHeight={26}>
         {answer.content}
       </SizableText>
 
@@ -434,9 +338,11 @@ export default function MeetingPrepScreen() {
   const timeMinutes = parseInt(partData.time ?? params.timeMinutes ?? '5', 10);
 
   const addSavedSource = useAppStore((s) => s.addSavedSource);
-  // Use global contentLanguage for all content and video fetching
+  const appLanguage = useAppStore((s) => s.appLanguage);
   const contentLanguage = useAppStore((s) => s.contentLanguage);
   const language = contentLanguage?.symbol || 'en';
+  const displaySymbol = appLanguage?.symbol || 'en';
+  const t = createTranslator(displaySymbol);
 
   const [answerLength, setAnswerLength] = useState<AnswerLength>('medium');
   const [tone, setTone] = useState<AnswerTone>('natural');
@@ -583,50 +489,44 @@ export default function MeetingPrepScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-      {/* ── Header ── */}
-      <XStack paddingHorizontal="$4" paddingTop="$2" paddingBottom="$3" alignItems="center" gap="$2">
+      <XStack paddingHorizontal="$4" paddingTop="$1" paddingBottom="$2" alignItems="center" gap="$2">
         <Button
           chromeless
           size="$3"
           onPress={() => safeBack(router, '/(tabs)/meetings')}
           icon={<ChevronLeft size={22} color={colors.textMuted} />}
         />
-        <YStack flex={1} gap="$1">
-          <SizableText size="$5" color={colors.text} fontWeight="900" numberOfLines={2}>
-            {partTitle}
-          </SizableText>
-        </YStack>
-        {/* Time badge */}
-        <XStack
-          backgroundColor={colors.glow}
-          borderRadius="$10"
-          paddingHorizontal="$3"
-          paddingVertical="$1"
-          borderWidth={1}
-          borderColor={colors.borderStrong}
-          gap="$1"
-          alignItems="center"
-        >
-          <Clock size={12} color={colors.primary} />
-          <SizableText size="$2" color={colors.primary} fontWeight="700">{timeMinutes} min</SizableText>
-        </XStack>
+        <SizableText flex={1} color={colors.text} fontSize={18} fontWeight="700" numberOfLines={2} lineHeight={24}>
+          {partTitle}
+        </SizableText>
+        <SizableText size="$2" color={colors.textMuted} fontWeight="600">
+          {timeMinutes} min
+        </SizableText>
       </XStack>
 
       <ScrollView flex={1} showsVerticalScrollIndicator={false}>
         <YStack padding="$4" gap="$5" paddingBottom="$12">
 
           {detailTokens.length > 0 && (
-            <YStack gap="$3">
-              <XStack gap="$2" alignItems="center">
-                <FileText size={16} color={colors.primary} />
-                <SizableText size="$3" color={colors.textMuted} fontWeight="800" letterSpacing={0.5}>
-                  SECTION CONTENT
-                </SizableText>
-              </XStack>
-              <Card backgroundColor={colors.surface} borderRadius="$7" padding="$4" borderWidth={1} borderColor={colors.border} gap="$3">
-                <InlineTokens tokens={detailTokens} onReference={setActiveReference} videoUrl={videoUrl} videoSource={videoSource} />
-              </Card>
-            </YStack>
+            <PremiumCard>
+              {videoUrl ? (
+                <YStack gap="$2" width="100%">
+                  {videoSource?.title ? (
+                    <SizableText color={colors.text} fontWeight="700" fontSize={15}>
+                      {videoSource.title}
+                    </SizableText>
+                  ) : null}
+                  {React.createElement('video', {
+                    src: videoUrl,
+                    controls: true,
+                    poster: videoSource?.poster,
+                    style: { width: '100%', borderRadius: 12, backgroundColor: colors.surface3 },
+                    playsInline: true,
+                  })}
+                </YStack>
+              ) : null}
+              <WolContentTokens tokens={detailTokens} onReference={setActiveReference} />
+            </PremiumCard>
           )}
 
           {/* ── References section ── */}
@@ -686,7 +586,7 @@ export default function MeetingPrepScreen() {
                     >
                       <SizableText size="$2" color={colors.accent} fontWeight="900">{i + 1}</SizableText>
                     </YStack>
-                    <SizableText size="$3" color={colors.textSoft} flex={1} lineHeight={22}>
+                    <SizableText size="$3" color={colors.text} flex={1} lineHeight={24}>
                       {q}
                     </SizableText>
                   </XStack>
@@ -695,62 +595,37 @@ export default function MeetingPrepScreen() {
             </YStack>
           )}
 
-          {/* ── Prepare Answer section ── */}
-          <YStack gap="$4">
-            <XStack gap="$2" alignItems="center">
-              <Zap size={16} color="#5B7E6B" />
-              <SizableText size="$3" color="#9CA3AF" fontWeight="700" letterSpacing={0.5}>
-                PREPARE ANSWER
-              </SizableText>
-            </XStack>
-
-            <Card
-              backgroundColor="#2C2C2E"
-              borderRadius="$4"
-              padding="$4"
-              borderWidth={1}
-              borderColor="#3A3A3C"
-              gap="$4"
-            >
-              {/* Length selector */}
+          <PremiumCard>
+            <YStack gap="$4">
               <YStack gap="$2">
-                <SizableText size="$3" color="#9CA3AF" fontWeight="600">Answer Length</SizableText>
+                <SizableText size="$3" color={colors.textMuted} fontWeight="600">
+                  Answer Length
+                </SizableText>
                 <BlinkToggleGroup
                   options={LENGTH_OPTIONS}
                   value={answerLength}
                   onValueChange={(v) => setAnswerLength(v as AnswerLength)}
                 />
               </YStack>
-
-              {/* Tone selector */}
               <YStack gap="$2">
-                <SizableText size="$3" color="#9CA3AF" fontWeight="600">Tone</SizableText>
+                <SizableText size="$3" color={colors.textMuted} fontWeight="600">
+                  Tone
+                </SizableText>
                 <BlinkToggleGroup
                   options={TONE_OPTIONS}
                   value={tone}
                   onValueChange={(v) => setTone(v as AnswerTone)}
                 />
               </YStack>
-
-              {/* Generate button */}
-              <Button
-                backgroundColor="#5B7E6B"
-                color="white"
-                fontWeight="700"
-                size="$4"
-                borderRadius="$4"
+              <GradientButton
                 onPress={() => generateAnswer(answerLength, tone)}
                 disabled={isGenerating}
-                icon={
-                  isGenerating
-                    ? <Spinner size="small" color="white" />
-                    : <Zap size={16} color="white" />
-                }
+                variant="royal"
               >
-                {isGenerating ? 'Generating…' : 'Generate Answer'}
-              </Button>
-            </Card>
-          </YStack>
+                {isGenerating ? t('synthesizing_answer') : t('generate_answer')}
+              </GradientButton>
+            </YStack>
+          </PremiumCard>
 
           {/* ── Generated answer ── */}
           {generatedAnswer && !isGenerating && (
@@ -769,18 +644,14 @@ export default function MeetingPrepScreen() {
 
           {/* Generating skeleton */}
           {isGenerating && (
-            <Card
-              backgroundColor="#2C2C2E"
-              borderRadius="$4"
-              padding="$5"
-              borderWidth={1}
-              borderColor="rgba(91,126,107,0.2)"
-              alignItems="center"
-              gap="$3"
-            >
-              <Spinner size="large" color="#5B7E6B" />
-              <SizableText size="$3" color="#9CA3AF">Preparing your answer…</SizableText>
-            </Card>
+            <PremiumCard>
+              <XStack gap="$3" alignItems="center" justifyContent="center">
+                <Spinner size="large" color={colors.primary} />
+                <SizableText size="$3" color={colors.textMuted}>
+                  {t('synthesizing_answer')}
+                </SizableText>
+              </XStack>
+            </PremiumCard>
           )}
 
         </YStack>

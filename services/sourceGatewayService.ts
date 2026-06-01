@@ -16,6 +16,11 @@ import {
   type WolReferenceToken,
 } from '@/services/wolReferenceService';
 import { getMediaLinks, getVideoSource, proxiedMediaUrl, searchJWOrg, searchWOL } from '@/services/jwApiService';
+import {
+  searchJWOrgWithMCP,
+  getArticleWithMCP,
+  searchWOLWithMCP,
+} from '@/services/mcpSourceGateway';
 import { DISPLAY_LANGUAGES } from '@/services/i18nService';
 import { getLanguageByCode, getLanguageBySymbol } from '@/services/languageService';
 import {
@@ -156,6 +161,17 @@ export async function gatewaySearchJwOrg(
   language: Language,
 ): Promise<SourceGatewayResult<unknown>> {
   const lang = normalizeAppLanguage(language);
+
+  try {
+    const mcpResult = await searchJWOrgWithMCP({ query, language: lang.symbol, limit: 20, useMCP: true });
+    return {
+      provider: 'jw-org-mcp-compatible',
+      data: mcpResult.results,
+    };
+  } catch (error) {
+    console.warn('MCP JW.org search failed, falling back to direct API:', error);
+  }
+
   return {
     provider: 'jw-org-mcp-compatible',
     data: await searchJWOrg(query, lang.symbol),
@@ -357,9 +373,14 @@ export async function gatewaySearchAll(
   const wolPages = Array.from({ length: options.wolPages ?? 5 }, (_, i) => i + 1);
   const requests = [
     ...wolPages.map(async (page) => {
-      const url = `https://wol.jw.org/${lang.symbol}/wol/s/${lang.wolRegion}/${lang.wolLangParam}?q=${encodeURIComponent(q)}&p=par&r=occ&st=a${page > 1 ? `&pg=${page}` : ''}`;
-      const { text } = await fetchWolText(url, 'text/html,application/json,*/*');
-      return parseWolSearchResults(text, `wol-${page}`, 'wol-mcp-compatible' as const);
+      try {
+        const wolContent = await searchWOLWithMCP(q, lang.symbol, lang.wolRegion, lang.wolLangParam, page);
+        return parseWolSearchResults(wolContent, `wol-${page}`, 'wol-mcp-compatible' as const);
+      } catch {
+        const url = `https://wol.jw.org/${lang.symbol}/wol/s/${lang.wolRegion}/${lang.wolLangParam}?q=${encodeURIComponent(q)}&p=par&r=occ&st=a${page > 1 ? `&pg=${page}` : ''}`;
+        const { text } = await fetchWolText(url, 'text/html,application/json,*/*');
+        return parseWolSearchResults(text, `wol-${page}`, 'wol-mcp-compatible' as const);
+      }
     }),
     searchJWOrg(q, lang.symbol).then((data) => parseJsonSearchResults(data, 'jw-org', 'jw-org-mcp-compatible' as const)).catch(() => []),
   ];
@@ -383,9 +404,12 @@ export async function gatewayFetchSourceBody(
   let title = source.title ?? 'Source';
   if (source.url) {
     try {
-      const doc = await gatewayGetWolDocument(source.url);
-      title = doc.data.title || title;
-      text = doc.data.text || text;
+      const doc = await getArticleWithMCP({ url: source.url, useMCP: true, fallbackToDirect: true });
+      title = title === 'Source' ? source.title ?? title : title;
+      text = doc.content || text;
+      if (doc.format === 'html' || doc.format === 'markdown') {
+        title = source.title ?? title;
+      }
     } catch {
       try {
         const { text: html } = await fetchWolText(source.url);

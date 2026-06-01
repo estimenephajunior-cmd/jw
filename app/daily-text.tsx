@@ -26,7 +26,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { TouchableOpacity, Linking } from 'react-native';
 import { safeBack } from '@/services/navigationService';
-import { generateAiText } from '@/services/localAiService';
+import { explainDailyText } from '@/services/aiRetrievalService';
 import { saveSource } from '@/services/storageService';
 import { createTranslator } from '@/services/i18nService';
 import { usePremiumTheme } from '@/hooks/usePremiumTheme';
@@ -43,6 +43,7 @@ import {
 } from '@/services/sourceGatewayService';
 import type { Language } from '@/types';
 import { PreviewModal } from '@/components/premium';
+import { WolContentTokens } from '@/components/wolContent';
 
 // ─── Brand tokens ─────────────────────────────────────────────────────────────
 const PRIMARY = '#5B7E6B';
@@ -56,11 +57,6 @@ const PRIMARY_BORDER = 'rgba(91,126,107,0.3)';
 
 // ─── Blink SDK client ─────────────────────────────────────────────────────────
 // ─── JW AI system prompt ──────────────────────────────────────────────────────
-const JW_SYSTEM_PROMPT =
-  'You are a JW study assistant. Using ONLY the following JW.org/WOL source content provided, ' +
-  "explain this daily text for personal application. NEVER invent quotes or references. " +
-  'Always cite your sources. If the content is insufficient, say so.';
-
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface DailyText {
   date: string;
@@ -96,48 +92,6 @@ function asReference(token: WolReferenceToken): WolReference | null {
   return { text: token.text, href: absoluteWolUrl(token.href), kind: token.kind };
 }
 
-function InlineDailyTokens({
-  tokens,
-  onReference,
-}: {
-  tokens: WolReferenceToken[];
-  onReference: (ref: WolReference) => void;
-}) {
-  const colors = usePremiumTheme();
-  return (
-    <XStack flexWrap="wrap" gap="$1" alignItems="baseline">
-      {tokens.map((token, index) => {
-        const ref = asReference(token);
-        if (!ref) {
-          return (
-            <SizableText
-              key={index}
-              size="$3"
-              color={colors.textSoft}
-              lineHeight={22}
-              width={token.text.includes('\n') ? '100%' : undefined}
-            >
-              {token.text}
-            </SizableText>
-          );
-        }
-        return (
-          <SizableText
-            key={index}
-            size="$3"
-            color={ref.kind === 'bible' || ref.kind === 'crossref' ? colors.primary : colors.accent}
-            lineHeight={22}
-            textDecorationLine="underline"
-            onPress={() => onReference(ref)}
-          >
-            {token.text}
-          </SizableText>
-        );
-      })}
-    </XStack>
-  );
-}
-
 function ReferenceSheet({
   reference,
   onClose,
@@ -165,27 +119,24 @@ function ReferenceSheet({
       .finally(() => setLoading(false));
   }, [reference]);
 
+  const displayTitle = preview?.title && preview.title !== reference?.text ? preview.title : reference?.text;
+
   return (
     <PreviewModal
       open={!!reference}
       onClose={onClose}
       label={reference?.kind === 'bible' || reference?.kind === 'crossref' ? t('bible_reference') : t('publication')}
-      title={reference?.text}
+      title={displayTitle}
       loading={loading}
+      loadingLabel={t('loading_reference')}
+      previewTokens={preview?.tokens}
+      onReference={onReference}
     >
-      {error ? (
-        <SizableText color={colors.danger}>{error}</SizableText>
-      ) : preview ? (
-        <YStack gap="$3">
-          {preview.title && preview.title !== reference?.text ? (
-            <SizableText size="$4" color={colors.textMuted} fontWeight="800">{preview.title}</SizableText>
-          ) : null}
-          {preview.tokens?.length ? (
-            <InlineDailyTokens tokens={preview.tokens} onReference={onReference} />
-          ) : (
-            <SizableText size="$4" color={colors.text} lineHeight={28}>{preview.content}</SizableText>
-          )}
-        </YStack>
+      {error ? <SizableText color={colors.danger}>{error}</SizableText> : null}
+      {!preview?.tokens?.length && preview?.content ? (
+        <SizableText color={colors.text} fontSize={17} lineHeight={28}>
+          {preview.content}
+        </SizableText>
       ) : null}
     </PreviewModal>
   );
@@ -325,23 +276,21 @@ export default function DailyTextScreen() {
     setAiAnswer('');
 
     try {
-      const result = await generateAiText({
-        messages: [
-          { role: 'system', content: JW_SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content:
-              `Daily Text for ${dailyText.date}:\n\n` +
-              `Scripture: ${dailyText.scripture}\n\n` +
-              (dailyText.scriptureText ? `Scripture text: ${dailyText.scriptureText}\n\n` : '') +
-              `Comment: ${dailyText.comment}\n\n` +
-              "Please explain how a Jehovah's Witness can apply this text in their life today, " +
-              'using only the JW content above.',
-          },
-        ],
-      });
+      const answer = await explainDailyText(
+        {
+          id: `daily_${dateKey}`,
+          date: dailyText.date,
+          scripture: dailyText.scripture,
+          scriptureText: dailyText.scriptureText ?? '',
+          comment: dailyText.comment,
+          sourceUrl: dailyText.fullUrl ?? '',
+          language,
+        },
+        '',
+        [],
+      );
 
-      setAiAnswer(result.text);
+      setAiAnswer(answer.content);
     } catch (e: any) {
       setAiError(e?.message ?? t('ai_generation_failed'));
     } finally {
@@ -483,7 +432,7 @@ export default function DailyTextScreen() {
                     {t('meditation_comment').toUpperCase()}
                   </SizableText>
                   {dailyText.commentTokens?.length ? (
-                    <InlineDailyTokens tokens={dailyText.commentTokens} onReference={setActiveReference} />
+                    <WolContentTokens tokens={dailyText.commentTokens} onReference={setActiveReference} />
                   ) : (
                     <SizableText
                       size="$3"

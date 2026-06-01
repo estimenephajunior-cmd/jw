@@ -1,8 +1,7 @@
 // ============================================================
 // JW Study Assistant — AI Retrieval Service
-// Uses Blink SDK AI (google/gemini-2.5-flash) with JW-only rules.
-// ALL answers are grounded in provided JW source content —
-// the model is forbidden from using general AI knowledge.
+// OpenAI / Gemini generation with JW-only rules.
+// Grounded flows: search JW/WOL → fetch bodies → generate.
 // ============================================================
 import { generateAiText } from '@/services/localAiService';
 import type {
@@ -14,7 +13,12 @@ import type {
   StudyWeek,
   SourceCitation,
 } from '../types';
-import { gatewayFetchSourcesForAi, normalizeAppLanguage } from '@/services/sourceGatewayService';
+import {
+  gatewayFetchSourcesForAi,
+  gatewaySearchAll,
+  normalizeAppLanguage,
+} from '@/services/sourceGatewayService';
+import type { Language } from '@/types';
 
 // -----------------------------------------------------------
 // JW Sources Only system prompt
@@ -73,23 +77,99 @@ function sourcesBlock(retrievedContent: string): string {
   return `\n\n---\nJW SOURCE CONTENT (use ONLY this):\n${retrievedContent}\n---`;
 }
 
+export interface RetrievedJwPack {
+  content: string;
+  citations: SourceCitation[];
+}
+
+/** Search JW.org/WOL and fetch article bodies (same pattern as Search AI Research). */
+export async function retrieveJwSourcesForQuery(
+  query: string,
+  language?: string | Language | null,
+  options: { maxResults?: number } = {},
+): Promise<RetrievedJwPack> {
+  const q = query.trim();
+  if (!q) return { content: '', citations: [] };
+
+  const lang = normalizeAppLanguage(
+    typeof language === 'string'
+      ? { symbol: language, code: language }
+      : language ?? null,
+  );
+  const maxResults = options.maxResults ?? 8;
+
+  try {
+    const { data: hits } = await gatewaySearchAll(q, lang, { wolPages: 4, jwLimit: 40 });
+    if (!hits.length) return { content: '', citations: [] };
+
+    const selected = hits.slice(0, maxResults);
+    const citations: SourceCitation[] = selected.map((hit) => ({
+      title: hit.title,
+      url: hit.url,
+      publication: hit.sourceTag,
+    }));
+
+    try {
+      const pack = await gatewayFetchSourcesForAi(selected, lang);
+      if (pack.content.trim()) {
+        return { content: pack.content, citations };
+      }
+    } catch {
+      // fall through to snippets
+    }
+
+    const snippetContent = selected
+      .map((hit, i) => `[${i + 1}] ${hit.title}\n${hit.snippet}\nURL: ${hit.url}`)
+      .join('\n\n');
+    return { content: snippetContent, citations };
+  } catch {
+    return { content: '', citations: [] };
+  }
+}
+
+function ministrySearchQuery(contact: MinistryContact): string {
+  const topics = contact.topicsDiscussed.slice(0, 3).join(' ');
+  const lastVisit = contact.visits?.slice(-1)[0];
+  const visitTopic =
+    lastVisit && 'topicDiscussed' in lastVisit
+      ? String((lastVisit as { topicDiscussed?: string }).topicDiscussed ?? '')
+      : '';
+  const parts = [topics, visitTopic, contact.status.replace(/-/g, ' '), 'ministry bible study']
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return parts.join(' ') || 'bible study return visit';
+}
+
 async function ensureRetrievedContent(
   retrievedContent: string,
   sources: SourceCitation[],
-  language?: string
-): Promise<string> {
-  if (!sources.some((source) => source.url)) return retrievedContent;
-  const lang = normalizeAppLanguage(language ? { symbol: language, code: language } : null);
-  try {
-    const fetched = await gatewayFetchSourcesForAi(sources.map((source) => ({
-      title: source.title,
-      url: source.url,
-      snippet: source.publication || source.paragraph || source.scripture,
-    })), lang);
-    return [retrievedContent, fetched.content].filter((item) => item.trim()).join('\n\n---\n\n');
-  } catch {
-    return retrievedContent;
+  language?: string,
+  searchQuery?: string,
+): Promise<{ content: string; sources: SourceCitation[] }> {
+  let content = retrievedContent;
+  let mergedSources = sources;
+
+  if (!content.trim() && searchQuery?.trim()) {
+    const pack = await retrieveJwSourcesForQuery(searchQuery, language);
+    content = pack.content;
+    mergedSources = pack.citations;
   }
+
+  if (mergedSources.some((source) => source.url)) {
+    const lang = normalizeAppLanguage(language ? { symbol: language, code: language } : null);
+    try {
+      const fetched = await gatewayFetchSourcesForAi(mergedSources.map((source) => ({
+        title: source.title,
+        url: source.url,
+        snippet: source.publication || source.paragraph || source.scripture,
+      })), lang);
+      content = [content, fetched.content].filter((item) => item.trim()).join('\n\n---\n\n');
+    } catch {
+      // keep existing content
+    }
+  }
+
+  return { content, sources: mergedSources };
 }
 
 // -----------------------------------------------------------
@@ -107,7 +187,7 @@ export async function answerFromJWSources(
   language?: string
 ): Promise<GeneratedAnswer> {
   const langNote = language ? `\nUser's language preference: ${language}` : '';
-  const sourceContent = await ensureRetrievedContent(retrievedContent, sources, language);
+  const { content: sourceContent } = await ensureRetrievedContent(retrievedContent, sources, language, question);
 
   const prompt =
     `${JW_SYSTEM_PROMPT}${profileContext(profile)}${langNote}` +
@@ -147,7 +227,8 @@ export async function generateMeetingAnswer(
   length: 'short' | 'medium' | 'long',
   tone: 'natural' | 'heartfelt' | 'scriptural'
 ): Promise<GeneratedAnswer> {
-  const sourceContent = await ensureRetrievedContent(retrievedContent, sources);
+  const searchQuery = [partTitle, ...references, ...questions].filter(Boolean).join(' ');
+  const { content: sourceContent } = await ensureRetrievedContent(retrievedContent, sources, undefined, searchQuery);
   const refsText = references.length
     ? `\nRelevant references: ${references.join(', ')}`
     : '';
@@ -194,7 +275,8 @@ export async function generateBibleReadingCoaching(
   length: 'short' | 'medium' | 'long',
   tone: 'natural' | 'heartfelt' | 'scriptural'
 ): Promise<GeneratedAnswer> {
-  const sourceContent = await ensureRetrievedContent(retrievedContent, sources);
+  const searchQuery = [partTitle, ...references].filter(Boolean).join(' ');
+  const { content: sourceContent } = await ensureRetrievedContent(retrievedContent, sources, undefined, searchQuery);
   const refsText = references.length
     ? `\nAssigned references and study lesson: ${references.join(', ')}`
     : '';
@@ -282,9 +364,15 @@ export async function generateWatchtowerAnswer(
 export async function generateMinistrySuggestion(
   contactInfo: MinistryContact,
   retrievedContent: string,
-  sources: SourceCitation[]
+  sources: SourceCitation[],
+  language?: string,
 ): Promise<GeneratedAnswer> {
-  const sourceContent = await ensureRetrievedContent(retrievedContent, sources);
+  const { content: sourceContent, sources: groundedSources } = await ensureRetrievedContent(
+    retrievedContent,
+    sources,
+    language,
+    ministrySearchQuery(contactInfo),
+  );
   const history = contactInfo.visits.length
     ? `\nPrevious visits (${contactInfo.visits.length}):\n` +
       contactInfo.visits
@@ -321,10 +409,137 @@ export async function generateMinistrySuggestion(
     length: 'medium',
     tone: 'natural',
     content: text,
-    sources,
+    sources: groundedSources,
     createdAt: nowISO(),
     saved: false,
   };
+}
+
+// -----------------------------------------------------------
+// generateMinistryVisitSuggestions (structured JSON for contact UI)
+// -----------------------------------------------------------
+
+export async function generateMinistryVisitSuggestions(
+  contact: MinistryContact,
+  language?: string,
+): Promise<string> {
+  const { content: sourceContent } = await retrieveJwSourcesForQuery(
+    ministrySearchQuery(contact),
+    language,
+  );
+
+  if (!sourceContent.trim()) {
+    throw new Error('No JW.org/WOL sources found. Try updating contact topics or search JW.org directly.');
+  }
+
+  const topicsList = contact.topicsDiscussed.join(', ') || 'general spiritual topics';
+  const scripturesList = contact.scripturesUsed.join(', ') || 'none yet';
+  const pubList = contact.publicationsShared.join(', ') || 'none yet';
+
+  const prompt =
+    `${JW_SYSTEM_PROMPT}` +
+    sourcesBlock(sourceContent) +
+    `\n\nMINISTRY CONTACT: ${contact.name} (${contact.status}).\n` +
+    `Topics discussed: ${topicsList}.\nScriptures used: ${scripturesList}.\nPublications shared: ${pubList}.\n\n` +
+    `Suggest the next visit using ONLY the JW source content above.\n` +
+    `Respond in JSON only with keys: nextTopic, scripture ({reference, text}), jwOrgResource ({title, type, url}), studyTip, conversationStarter.\n` +
+    `Scriptures and resources must appear in the provided sources. For videos, use type "video" and the URL from sources.`;
+
+  const { text } = await generateAiText({ prompt });
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const jsonMatch = text?.match(/```(?:json)?\n?([\s\S]*?)\n?```/) || text?.match(/\{[\s\S]*\}/);
+    const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : text;
+    parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+  } catch {
+    return text;
+  }
+
+  const scripture = parsed.scripture as { reference?: string; text?: string } | undefined;
+  const jwOrgResource = parsed.jwOrgResource as { title?: string; type?: string; url?: string } | undefined;
+
+  return [
+    parsed.nextTopic && `💬 Next Topic\n${parsed.nextTopic}`,
+    scripture?.reference && `📖 Scripture\n${scripture.reference} — "${scripture.text ?? ''}"`,
+    jwOrgResource?.title && `🌐 JW.org Resource\n${jwOrgResource.title} (${jwOrgResource.type ?? 'article'})${jwOrgResource.url ? `\n${jwOrgResource.url}` : ''}`,
+    parsed.conversationStarter && `🗣 Conversation Starter\n${parsed.conversationStarter}`,
+    parsed.studyTip && `✨ Study Tip\n${parsed.studyTip}`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+// -----------------------------------------------------------
+// generateStudyPlanWeekTopics
+// -----------------------------------------------------------
+
+export async function generateStudyPlanWeekTopics(
+  planTitle: string,
+  planType: 'weekly' | 'monthly' | 'annual',
+  totalWeeks: number,
+  profileJson: string,
+  language?: string,
+): Promise<string[]> {
+  const searchQuery = `${planTitle} personal study Jehovah's Witness`;
+  const { content: sourceContent } = await retrieveJwSourcesForQuery(searchQuery, language);
+
+  if (!sourceContent.trim()) {
+    throw new Error('No JW.org/WOL sources found for this study plan. Try a different title or search JW.org directly.');
+  }
+
+  const prompt =
+    `${JW_SYSTEM_PROMPT}` +
+    sourcesBlock(sourceContent) +
+    `\n\nCreate exactly ${totalWeeks} study week topics for a ${planType} personal study plan titled "${planTitle}".\n` +
+    `User profile (for pacing only): ${profileJson}\n` +
+    `Respond ONLY with a JSON array of ${totalWeeks} strings. Each string is one week topic derived from the JW source content above.\n` +
+    `Do not invent publication names or doctrines not in the sources.`;
+
+  const { text } = await generateAiText({ prompt });
+  const jsonMatch = text?.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) throw new Error('Could not parse study topics from AI response.');
+  const topics = JSON.parse(jsonMatch[0]) as string[];
+  if (!Array.isArray(topics) || topics.length < 1) {
+    throw new Error('Invalid study topics returned.');
+  }
+  return topics.slice(0, totalWeeks);
+}
+
+// -----------------------------------------------------------
+// generateWeekStudyGuide
+// -----------------------------------------------------------
+
+export interface WeekStudyGuide {
+  keyPoints: string[];
+  suggestedScriptures: string[];
+  discussionQuestions: string[];
+  personalApplication: string;
+  jwSource: string;
+}
+
+export async function generateWeekStudyGuide(
+  weekNumber: number,
+  topic: string,
+  language?: string,
+): Promise<WeekStudyGuide> {
+  const { content: sourceContent } = await retrieveJwSourcesForQuery(topic, language);
+
+  if (!sourceContent.trim()) {
+    throw new Error('No JW.org/WOL sources found for this topic. Try another topic or search JW.org directly.');
+  }
+
+  const prompt =
+    `${JW_SYSTEM_PROMPT}` +
+    sourcesBlock(sourceContent) +
+    `\n\nGenerate a study guide for Week ${weekNumber}: "${topic}".\n` +
+    `Use ONLY the JW source content above. Respond in JSON with keys: keyPoints (string[]), suggestedScriptures (string[]), ` +
+    `discussionQuestions (string[]), personalApplication (string), jwSource (string — title/URL from sources).`;
+
+  const { text } = await generateAiText({ prompt });
+  const jsonMatch = text?.match(/```(?:json)?\n?([\s\S]*?)\n?```/) || text?.match(/\{[\s\S]*\}/);
+  const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : text;
+  return JSON.parse(jsonStr) as WeekStudyGuide;
 }
 
 // -----------------------------------------------------------
@@ -340,7 +555,13 @@ export async function explainDailyText(
   sources: SourceCitation[],
   profile?: UserProfile
 ): Promise<GeneratedAnswer> {
-  const sourceContent = await ensureRetrievedContent(retrievedContent, sources, dailyText.language);
+  const searchQuery = `${dailyText.scripture} ${dailyText.comment.slice(0, 120)}`;
+  const { content: sourceContent } = await ensureRetrievedContent(
+    retrievedContent,
+    sources,
+    dailyText.language,
+    searchQuery,
+  );
   const prompt =
     `${JW_SYSTEM_PROMPT}${profileContext(profile)}` +
     sourcesBlock(sourceContent) +
@@ -462,11 +683,15 @@ export async function generateStudyPlan(
 // Default export
 // -----------------------------------------------------------
 export default {
+  retrieveJwSourcesForQuery,
   answerFromJWSources,
   generateMeetingAnswer,
   generateBibleReadingCoaching,
   generateWatchtowerAnswer,
   generateMinistrySuggestion,
+  generateMinistryVisitSuggestions,
+  generateStudyPlanWeekTopics,
+  generateWeekStudyGuide,
   explainDailyText,
   generateStudyPlan,
 };

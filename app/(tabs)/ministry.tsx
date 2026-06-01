@@ -21,6 +21,9 @@ import {
 import { useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePremiumTheme } from '@/hooks/usePremiumTheme';
+import { useAppStore } from '@/store/appStore';
+import { translate } from '@/services/i18nService';
+import { AppScreen, AppHeader, EmptyState as PremiumEmpty, GradientButton, PremiumCard } from '@/components/premium';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -67,12 +70,14 @@ function isOverdue(iso?: string): boolean {
   return new Date(iso) < new Date();
 }
 
-const FILTER_TABS: { key: FilterType; label: string }[] = [
-  { key: 'all',          label: 'All' },
-  { key: 'return-visit', label: 'Return Visits' },
-  { key: 'bible-study',  label: 'Bible Studies' },
-  { key: 'first-call',   label: 'First Call' },
-];
+function getFilterTabs(symbol: string): { key: FilterType; label: string }[] {
+  return [
+    { key: 'all', label: translate(symbol, 'all') },
+    { key: 'return-visit', label: translate(symbol, 'filter_return_visits') },
+    { key: 'bible-study', label: translate(symbol, 'filter_bible_studies') },
+    { key: 'first-call', label: translate(symbol, 'filter_first_call') },
+  ];
+}
 
 // ─── Contact Card ─────────────────────────────────────────────────────────────
 
@@ -82,24 +87,37 @@ function ContactCard({
   onVisit,
   onPrepare,
   onRemind,
+  displaySymbol,
 }: {
   contact: MinistryContact;
   onPress: () => void;
   onVisit: () => void;
   onPrepare: () => void;
   onRemind: () => void;
+  displaySymbol: string;
 }) {
+  const colors = usePremiumTheme();
   const cfg = STATUS_CONFIG[contact.status];
+  const statusLabel =
+    contact.status === 'return-visit'
+      ? translate(displaySymbol, 'return_visit')
+      : contact.status === 'bible-study'
+        ? translate(displaySymbol, 'bible_study')
+        : contact.status === 'first-call'
+          ? translate(displaySymbol, 'first_call')
+          : contact.status === 'inactive'
+            ? translate(displaySymbol, 'inactive')
+            : translate(displaySymbol, 'not_interested');
   const lastVisit = contact.visits?.[contact.visits.length - 1]?.date;
   const overdue = isOverdue(contact.nextVisitDate);
 
   return (
     <TouchableOpacity activeOpacity={0.85} onPress={onPress}>
       <Card
-        backgroundColor="#2C2C2E"
-        borderRadius="$4"
+        backgroundColor={colors.surface}
+        borderRadius="$6"
         borderWidth={1}
-        borderColor="#3A3A3C"
+        borderColor={colors.border}
         overflow="hidden"
         marginBottom="$3"
       >
@@ -118,11 +136,11 @@ function ContactCard({
           {/* Content */}
           <YStack flex={1} gap="$1">
             <XStack alignItems="center" gap="$2">
-              <SizableText size="$5" color="#F2F2F7" fontWeight="700">
-                {contact.name || 'Anonymous'}
+              <SizableText size="$5" color={colors.text} fontWeight="700">
+                {contact.name || '—'}
               </SizableText>
               {contact.nickname ? (
-                <SizableText size="$3" color="#9CA3AF">
+                <SizableText size="$3" color={colors.textMuted}>
                   "{contact.nickname}"
                 </SizableText>
               ) : null}
@@ -137,16 +155,16 @@ function ContactCard({
                 borderRadius="$10"
               >
                 <SizableText size="$1" color={cfg.color} fontWeight="700">
-                  {cfg.label.toUpperCase()}
+                  {statusLabel.toUpperCase()}
                 </SizableText>
               </YStack>
               {lastVisit ? (
-                <SizableText size="$2" color="#6B7280">
-                  Last: {formatDate(lastVisit)}
+                <SizableText size="$2" color={colors.textMuted}>
+                  {translate(displaySymbol, 'last_visit_label')}: {formatDate(lastVisit)}
                 </SizableText>
               ) : (
-                <SizableText size="$2" color="#6B7280">
-                  No visits yet
+                <SizableText size="$2" color={colors.textMuted}>
+                  {translate(displaySymbol, 'no_visits_yet_label')}
                 </SizableText>
               )}
             </XStack>
@@ -188,41 +206,15 @@ function ContactCard({
           <Button
             flex={1}
             size="$2"
-            backgroundColor="rgba(91,126,107,0.15)"
-            color="#5B7E6B"
-            borderColor="rgba(91,126,107,0.25)"
+            backgroundColor={colors.tabActiveBg}
+            color={colors.primary}
+            borderColor={colors.border}
             borderWidth={1}
             borderRadius="$3"
             onPress={(e) => { e.stopPropagation?.(); onVisit(); }}
             pressStyle={{ opacity: 0.75 }}
           >
-            Visit
-          </Button>
-          <Button
-            flex={1}
-            size="$2"
-            backgroundColor="rgba(59,130,246,0.12)"
-            color="#3B82F6"
-            borderColor="rgba(59,130,246,0.25)"
-            borderWidth={1}
-            borderRadius="$3"
-            onPress={(e) => { e.stopPropagation?.(); onPrepare(); }}
-            pressStyle={{ opacity: 0.75 }}
-          >
-            Prepare
-          </Button>
-          <Button
-            flex={1}
-            size="$2"
-            backgroundColor="rgba(245,158,11,0.12)"
-            color="#F59E0B"
-            borderColor="rgba(245,158,11,0.25)"
-            borderWidth={1}
-            borderRadius="$3"
-            onPress={(e) => { e.stopPropagation?.(); onRemind(); }}
-            pressStyle={{ opacity: 0.75 }}
-          >
-            Remind
+            {translate(displaySymbol, 'visit_action')}
           </Button>
         </XStack>
       </Card>
@@ -273,39 +265,19 @@ function StatsRow({ contacts }: { contacts: MinistryContact[] }) {
 
 // ─── Empty State ──────────────────────────────────────────────────────────────
 
-function EmptyState({ onAdd }: { onAdd: () => void }) {
+function MinistryEmptyState({ onAdd, displaySymbol }: { onAdd: () => void; displaySymbol: string }) {
+  const colors = usePremiumTheme();
   return (
-    <YStack flex={1} alignItems="center" justifyContent="center" gap="$4" paddingTop="$12" paddingHorizontal="$6">
-      <YStack
-        width={80}
-        height={80}
-        borderRadius={40}
-        backgroundColor="rgba(91,126,107,0.15)"
-        justifyContent="center"
-        alignItems="center"
-      >
-        <Users size={38} color="#5B7E6B" />
-      </YStack>
-      <YStack gap="$2" alignItems="center">
-        <SizableText size="$5" color="#F2F2F7" fontWeight="700" textAlign="center">
-          No ministry contacts yet
-        </SizableText>
-        <SizableText size="$3" color="#9CA3AF" textAlign="center" maxWidth={280} lineHeight={20}>
-          Add your first contact to track your return visits, bible studies, and field service progress.
-        </SizableText>
-      </YStack>
-      <Button
-        backgroundColor="#5B7E6B"
-        color="#FFFFFF"
-        borderRadius="$4"
-        paddingHorizontal="$6"
-        onPress={onAdd}
-        pressStyle={{ opacity: 0.8 }}
-        icon={<Plus size={16} color="#FFFFFF" />}
-      >
-        Add First Contact
-      </Button>
-    </YStack>
+    <PremiumEmpty
+      icon={<Users size={36} color={colors.primary} />}
+      title={translate(displaySymbol, 'no_ministry_contacts_yet')}
+      subtitle={translate(displaySymbol, 'ministry_empty_hint')}
+      action={
+        <GradientButton onPress={onAdd} icon={<Plus size={16} color="#fff" />}>
+          {translate(displaySymbol, 'add_first_contact')}
+        </GradientButton>
+      }
+    />
   );
 }
 
@@ -314,12 +286,9 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 export default function MinistryScreen() {
   const router = useRouter();
   const colors = usePremiumTheme();
-  const th = {
-    bg: colors.bg,
-    ink: colors.text,
-    inkInverse: '#FFFFFF',
-    copper: colors.primaryDeep,
-  };
+  const appLanguage = useAppStore((s) => s.appLanguage);
+  const displaySymbol = appLanguage?.symbol || 'en';
+  const filterTabs = getFilterTabs(displaySymbol);
   const [contacts, setContacts] = useState<MinistryContact[]>([]);
   const [filter, setFilter] = useState<FilterType>('all');
   const [loading, setLoading] = useState(true);
@@ -345,37 +314,33 @@ export default function MinistryScreen() {
     : contacts.filter(c => c.status === filter);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: th.bg }} testID="ministry-screen">
-      {/* Header */}
-      <XStack
-        paddingHorizontal="$5"
-        paddingTop="$3"
-        paddingBottom="$2"
-        justifyContent="space-between"
-        alignItems="center"
-      >
-        <H2 color={th.ink} fontWeight="800" style={{ fontSize: 32, fontFamily: 'Georgia, serif', letterSpacing: -0.8 }}>
-          Field Ministry
-        </H2>
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPress={() => router.push('/add-contact' as any)}
-          style={{
-            width: 44,
-            height: 44,
-            borderRadius: 22,
-            backgroundColor: th.copper,
-            justifyContent: 'center',
-            alignItems: 'center',
-          }}
-        >
-          <Plus size={22} color={th.inkInverse} />
-        </TouchableOpacity>
-      </XStack>
+    <AppScreen scroll={false} padded={false}>
+      <YStack paddingHorizontal="$5" paddingTop="$2" paddingBottom="$2" width="100%">
+        <AppHeader
+          title={translate(displaySymbol, 'ministry_territory_title')}
+          subtitle={translate(displaySymbol, 'territory_people')}
+          right={
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => router.push('/add-contact' as any)}
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                backgroundColor: colors.primary,
+                justifyContent: 'center',
+                alignItems: 'center',
+              }}
+            >
+              <Plus size={22} color="#FFFFFF" />
+            </TouchableOpacity>
+          }
+        />
+      </YStack>
 
       {loading ? (
         <YStack flex={1} justifyContent="center" alignItems="center">
-          <Spinner size="large" color="#5B7E6B" />
+          <Spinner size="large" color={colors.primary} />
         </YStack>
       ) : (
         <FlatList
@@ -390,7 +355,7 @@ export default function MinistryScreen() {
 
               {/* Filter tabs */}
               <XStack gap="$2" flexWrap="wrap">
-                {FILTER_TABS.map(tab => (
+                {filterTabs.map(tab => (
                   <TouchableOpacity
                     key={tab.key}
                     activeOpacity={0.8}
@@ -399,14 +364,14 @@ export default function MinistryScreen() {
                       paddingHorizontal: 14,
                       paddingVertical: 7,
                       borderRadius: 20,
-                      backgroundColor: filter === tab.key ? '#5B7E6B' : '#2C2C2E',
+                      backgroundColor: filter === tab.key ? colors.tabActiveBg : colors.surface,
                       borderWidth: 1,
-                      borderColor: filter === tab.key ? '#5B7E6B' : '#3A3A3C',
+                      borderColor: filter === tab.key ? colors.primary : colors.border,
                     }}
                   >
                     <SizableText
                       size="$2"
-                      color={filter === tab.key ? '#FFFFFF' : '#9CA3AF'}
+                      color={filter === tab.key ? colors.primary : colors.textMuted}
                       fontWeight={filter === tab.key ? '700' : '500'}
                     >
                       {tab.label}
@@ -424,21 +389,20 @@ export default function MinistryScreen() {
             </YStack>
           }
           ListEmptyComponent={
-            <EmptyState onAdd={() => router.push('/add-contact' as any)} />
+            <MinistryEmptyState onAdd={() => router.push('/add-contact' as any)} displaySymbol={displaySymbol} />
           }
           renderItem={({ item }) => (
             <ContactCard
               contact={item}
+              displaySymbol={displaySymbol}
               onPress={() => router.push(`/contact-detail?id=${item.id}` as any)}
               onVisit={() => router.push(`/add-visit?contactId=${item.id}` as any)}
               onPrepare={() => router.push(`/ministry-prep?contactId=${item.id}` as any)}
-              onRemind={() => {
-                // Stub: reminder logic handled by backendDeveloper / notification service
-              }}
+              onRemind={() => {}}
             />
           )}
         />
       )}
-    </SafeAreaView>
+    </AppScreen>
   );
 }

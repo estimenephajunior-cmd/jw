@@ -1,5 +1,5 @@
 // JW Study Assistant — Ministry AI Preparation Screen
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { SafeAreaView, TouchableOpacity, ScrollView } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import {
@@ -7,7 +7,10 @@ import {
 } from '@blinkdotnew/mobile-ui';
 import { ChevronLeft, Sparkles, Bookmark, Copy, RefreshCw } from '@blinkdotnew/mobile-ui';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { generateAiText } from '@/services/localAiService';
+import { generateMinistrySuggestion } from '@/services/aiRetrievalService';
+import { normalizeAppLanguage } from '@/services/sourceGatewayService';
+import { useAppStore } from '@/store/appStore';
+import type { MinistryContact } from '@/types';
 import { saveSource } from '@/services/storageService';
 
 const PRIMARY = '#5B7E6B';
@@ -18,57 +21,51 @@ const TEXT_PRIMARY = '#F2F2F7';
 const TEXT_SECONDARY = '#9CA3AF';
 const PRIMARY_SUBTLE = 'rgba(91,126,107,0.15)';
 
-const JW_SYSTEM_PROMPT = `You are a JW Study Assistant. You ONLY help Jehovah's Witnesses with their ministry using JW.org and Watchtower sources.
-
-CRITICAL RULES:
-1. NEVER invent scripture references, publication names, or doctrine.
-2. Always cite sources as "Based on JW.org sources:".
-3. If no JW source applies, say: "I could not find a JW.org source. Please search JW.org directly."
-4. Keep suggestions practical, warm, and scripturally sound.
-5. Answer in a respectful, humble tone.`;
-
 export default function MinistryPrepScreen() {
   const router = useRouter();
   const { contactId } = useLocalSearchParams<{ contactId: string }>();
+  const rawContentLanguage = useAppStore((s) => s.contentLanguage || s.language);
+  const contentLanguage = useMemo(() => normalizeAppLanguage(rawContentLanguage), [rawContentLanguage]);
 
-  const [contact, setContact] = useState<any>(null);
+  const [contact, setContact] = useState<MinistryContact | null>(null);
   const [aiSuggestion, setAiSuggestion] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
-  // Load contact
-  useState(() => {
+  useEffect(() => {
     if (contactId) {
-      AsyncStorage.getItem('jw_sa:contacts').then(raw => {
+      AsyncStorage.getItem('jw_sa:contacts').then((raw) => {
         const contacts = raw ? JSON.parse(raw) : [];
-        const found = contacts.find((c: any) => c.id === contactId);
+        const found = contacts.find((c: MinistryContact) => c.id === contactId);
         setContact(found || null);
         setLoaded(true);
       });
     } else {
       setLoaded(true);
     }
-  });
+  }, [contactId]);
 
   const handleGenerate = async () => {
     setIsGenerating(true);
     setAiSuggestion('');
     try {
-      const contactInfo = contact
-        ? `Contact: ${contact.name}\nStatus: ${contact.status}\nTopics discussed: ${contact.topicsDiscussed?.join(', ') || 'None'}\nScriptures used: ${contact.scripturesUsed?.join(', ') || 'None'}\nPublications shared: ${contact.publicationsShared?.join(', ') || 'None'}\nQuestions asked: ${contact.questionsAsked?.join(', ') || 'None'}\nNotes: ${contact.notes?.join('; ') || 'None'}`
-        : 'No specific contact selected. Give general ministry suggestions.';
+      const ministryContact: MinistryContact = contact ?? {
+        id: 'general',
+        name: 'General ministry',
+        status: 'return-visit',
+        topicsDiscussed: [],
+        scripturesUsed: [],
+        publicationsShared: [],
+        videosShared: [],
+        questionsAsked: [],
+        notes: [],
+        reminderEnabled: false,
+        visits: [],
+      };
 
-      const { text } = await generateAiText({
-        messages: [
-          { role: 'system', content: JW_SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content: `Please suggest ministry preparation for the following:\n\n${contactInfo}\n\nProvide:\n1. Suggested conversation opener\n2. Scripture to use (from the Bible)\n3. JW.org article or video to share\n4. How to move toward a Bible study\n\nBase all suggestions on JW.org/WOL content. Be warm and practical.`,
-          },
-        ],
-      });
-      setAiSuggestion(text || '');
-    } catch (e) {
+      const answer = await generateMinistrySuggestion(ministryContact, '', [], contentLanguage.symbol);
+      setAiSuggestion(answer.content || '');
+    } catch {
       toast('Error', { message: 'Could not generate suggestion. Check your connection.', variant: 'error' });
     } finally {
       setIsGenerating(false);

@@ -26,9 +26,10 @@ import {
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { MinistryContact } from './(tabs)/ministry';
-import { generateAiText } from '@/services/localAiService';
-
-// ─── Blink AI client (visual layer only — wired by backendDeveloper) ──────────
+import { generateMinistryVisitSuggestions } from '@/services/aiRetrievalService';
+import { normalizeAppLanguage } from '@/services/sourceGatewayService';
+import { useAppStore } from '@/store/appStore';
+import type { MinistryContact as AiMinistryContact } from '@/types';
 
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -132,43 +133,39 @@ function AISuggestionsPanel({ contact }: { contact: MinistryContact }) {
   const [loading, setLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const rawContentLanguage = useAppStore((s) => s.contentLanguage || s.language);
+  const contentLanguage = normalizeAppLanguage(rawContentLanguage);
 
   const handleGenerate = async () => {
     setLoading(true);
     setError(null);
     try {
-      const topicsList = contact.topicsDiscussed.join(', ') || 'general spiritual topics';
-      const scripturesList = contact.scripturesUsed.join(', ') || 'none yet';
-      const pubList = contact.publicationsShared.join(', ') || 'none yet';
-
-      const result = await generateAiText({
-        system: `You are a JW Study Assistant helping a Jehovah's Witness prepare for their next visit with a bible student or return visit. Only suggest topics, scriptures, and materials from JW.org official sources (jw.org, Watchtower, Awake!, Bible Teach book, Enjoy Life Forever, etc.). Be practical, warm, and encouraging. Respond in structured JSON format with these keys: nextTopic (string), scripture (object with reference and text), jwOrgResource (object with title, type, and url), studyTip (string), conversationStarter (string).`,
-        messages: [{
-          role: 'user',
-          content: `Contact: ${contact.name} (${STATUS_CONFIG[contact.status].label}).\nTopics already discussed: ${topicsList}.\nScriptures used: ${scripturesList}.\nPublications shared: ${pubList}.\nStatus: ${contact.status}.\n\nPlease suggest what to focus on for the next visit to help them progress toward or deepen their Bible study.`,
-        }],
-      });
-
-      let parsed: any = null;
-      try {
-        // Extract JSON from markdown code blocks if present
-        const jsonMatch = result.text?.match(/```(?:json)?\n?([\s\S]*?)\n?```/) ||
-                          result.text?.match(/\{[\s\S]*\}/);
-        const jsonStr = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : result.text;
-        parsed = JSON.parse(jsonStr);
-      } catch {
-        setSuggestions(result.text ?? 'No suggestions generated.');
-        return;
-      }
-
-      const formatted = [
-        parsed.nextTopic && `💬 Next Topic\n${parsed.nextTopic}`,
-        parsed.scripture && `📖 Scripture\n${parsed.scripture.reference} — "${parsed.scripture.text}"`,
-        parsed.jwOrgResource && `🌐 JW.org Resource\n${parsed.jwOrgResource.title} (${parsed.jwOrgResource.type})`,
-        parsed.conversationStarter && `🗣 Conversation Starter\n${parsed.conversationStarter}`,
-        parsed.studyTip && `✨ Study Tip\n${parsed.studyTip}`,
-      ].filter(Boolean).join('\n\n');
-
+      const aiContact: AiMinistryContact = {
+        id: contact.id,
+        name: contact.name,
+        nickname: contact.nickname,
+        phone: contact.phone,
+        address: contact.address,
+        status: contact.status,
+        topicsDiscussed: contact.topicsDiscussed,
+        scripturesUsed: contact.scripturesUsed,
+        publicationsShared: contact.publicationsShared,
+        videosShared: [],
+        questionsAsked: contact.questionsAsked,
+        notes: contact.notes,
+        reminderEnabled: contact.reminderEnabled,
+        visits: contact.visits.map((v) => ({
+          id: v.id,
+          contactId: contact.id,
+          date: v.date,
+          topicDiscussed: v.notes,
+          scripturesUsed: [],
+          publicationsShared: [],
+          notes: v.notes,
+          outcome: '',
+        })),
+      };
+      const formatted = await generateMinistryVisitSuggestions(aiContact, contentLanguage.symbol);
       setSuggestions(formatted);
     } catch (err: any) {
       setError(err?.message ?? 'Could not generate suggestions. Please try again.');

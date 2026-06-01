@@ -22,3 +22,6 @@ tmp-*.html
 test.js
 fetch_wol.js
 ui-refresh-*.png
+
+# MCP runtime checkouts installed by `npm run setup:mcp-runtimes`
+vendor/mcp/

@@ -1,6 +1,6 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Platform } from 'react-native';
+import { Platform, useColorScheme } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BlinkProvider, createTamagui, tamaguiDefaultConfig, Theme, BlinkToastProvider } from '@blinkdotnew/mobile-ui';
 import { useFrameworkReady } from '@/hooks/useFrameworkReady';
@@ -26,11 +26,14 @@ function WebStyleReset() {
     <style
       dangerouslySetInnerHTML={{
         __html: `
-          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Newsreader:opsz,wght@6..72,600;6..72,700;6..72,800&display=swap');
-          *{box-sizing:border-box}
-          html,body,#root{min-height:100%;background:#070A12}
-          body{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-          input:focus,textarea:focus{outline:none!important}
+          @import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+          *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+          html,body,#root{min-height:100%;width:100%;max-width:100%;background:#07111F;overflow-x:hidden;}
+          body{margin:0;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#F4F0E8;}
+          h1,h2,h3,h4{font-family:'Inter Tight','Inter',-apple-system,sans-serif;}
+          input:focus,textarea:focus{outline:2px solid rgba(31,77,140,0.45)!important;outline-offset:2px;}
+          @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:0.01ms!important;transition-duration:0.01ms!important;}}
+          img,canvas,video,iframe,svg{max-width:100%;}
         `,
       }}
     />
@@ -74,7 +77,9 @@ function ThemeHydrator() {
 
 function AppShell() {
   const theme = useAppStore((s) => s.theme);
-  const resolvedTheme = theme === 'light' ? 'light' : 'dark';
+  const scheme = useColorScheme();
+  const resolvedTheme =
+    theme === 'system' ? (scheme === 'light' ? 'light' : 'dark') : theme === 'light' ? 'light' : 'dark';
 
   return (
     <BlinkProvider config={config} defaultTheme={resolvedTheme}>

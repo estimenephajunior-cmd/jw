@@ -38,6 +38,7 @@ import { safeBack } from '@/services/navigationService';
 import {
   fetchWolText,
   refsFromHtml,
+  tokenizeWolHtml,
   type WolPreview,
   type WolReference,
   type WolReferenceToken,
@@ -46,6 +47,7 @@ import { gatewayResolveReference } from '@/services/sourceGatewayService';
 import type { GeneratedAnswer } from '@/types';
 import { PreviewModal } from '@/components/premium';
 import { usePremiumTheme } from '@/hooks/usePremiumTheme';
+import { WolContentTokens } from '@/components/wolContent';
 
 // ── Types ─────────────────────────────────────────────────────
 type AnswerLength = 'short' | 'medium' | 'long';
@@ -393,9 +395,18 @@ function ParagraphCard({ group, activePid, onPrepare, onReference }: ParagraphCa
             <SizableText size="$3" color={para.dataPid === activePid ? colors.gold : colors.primary} fontWeight="900" width={30}>
               {para.number}
             </SizableText>
-            <SizableText size="$3" color={colors.textSoft} flex={1} lineHeight={24}>
-              {para.text}
-            </SizableText>
+            {para.html ? (
+              <YStack flex={1}>
+                <WolContentTokens
+                  tokens={tokenizeWolHtml(para.html)}
+                  onReference={onReference}
+                />
+              </YStack>
+            ) : (
+              <SizableText size="$3" color={colors.text} flex={1} lineHeight={26}>
+                {para.text}
+              </SizableText>
+            )}
           </XStack>
           {(para.images ?? []).map((image) => (
             <YStack key={image.url} marginLeft={42} gap="$2">
@@ -414,18 +425,6 @@ function ParagraphCard({ group, activePid, onPrepare, onReference }: ParagraphCa
               {image.caption ? (
                 <SizableText size="$2" color="#9CA3AF" lineHeight={18}>{image.caption}</SizableText>
               ) : null}
-              <Button
-                size="$2"
-                backgroundColor="rgba(123,107,158,0.14)"
-                borderColor="rgba(123,107,158,0.3)"
-                borderWidth={1}
-                color="#B9A8E8"
-                alignSelf="flex-start"
-                icon={<Zap size={12} color="#B9A8E8" />}
-                onPress={() => onPrepare(para, `${group.question}\n\nInclude the paragraph image in the comment.`)}
-              >
-                Prepare for Image
-              </Button>
             </YStack>
           ))}
           {(para.refs ?? []).length > 0 && (
@@ -448,18 +447,6 @@ function ParagraphCard({ group, activePid, onPrepare, onReference }: ParagraphCa
         </YStack>
       ))}
 
-      <Button
-        size="$2"
-        backgroundColor="rgba(91,126,107,0.1)"
-        borderColor="rgba(91,126,107,0.25)"
-        borderWidth={1}
-        color="#5B7E6B"
-        alignSelf="flex-start"
-        icon={<Zap size={12} color="#5B7E6B" />}
-        onPress={() => onPrepare(firstPara, group.question)}
-      >
-        Prepare Answer
-      </Button>
     </Card>
   );
 }
@@ -475,6 +462,7 @@ interface AnswerSheetProps {
   onSave: (answer: GeneratedAnswer, para: ParsedParagraph) => Promise<void>;
 }
 function AnswerSheet({ open, onClose, paragraph, question, articleTitle, articleContext, onSave }: AnswerSheetProps) {
+  const colors = usePremiumTheme();
   const appLanguage = useAppStore((s) => s.appLanguage);
   const language = useAppStore((s) => s.language);
   const t = createTranslator(appLanguage?.symbol || language?.symbol || 'en');
@@ -545,8 +533,8 @@ function AnswerSheet({ open, onClose, paragraph, question, articleTitle, article
         <Sheet.Handle backgroundColor="#3A3A3C" />
         <ScrollView flex={1} showsVerticalScrollIndicator={false}>
           <YStack padding="$4" gap="$4" paddingBottom="$10">
-            <SizableText size="$5" color="#F2F2F7" fontWeight="700">
-              Prepare Answer
+            <SizableText size="$5" color={colors.text} fontWeight="700">
+              {t('generate_answer')}
             </SizableText>
 
             {/* Question preview */}
@@ -669,6 +657,8 @@ function ReferenceSheet({
   reference: WolReference | null;
   onReference: (ref: WolReference) => void;
 }) {
+  const appLanguage = useAppStore((s) => s.appLanguage);
+  const t = createTranslator(appLanguage?.symbol || 'en');
   const [preview, setPreview] = useState<WolPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -684,64 +674,27 @@ function ReferenceSheet({
       .finally(() => setLoading(false));
   }, [open, reference]);
 
+  const colors = usePremiumTheme();
+  const displayTitle = preview?.title && preview.title !== reference?.text ? preview.title : reference?.text;
+
   return (
     <PreviewModal
       open={open}
       onClose={onClose}
-      label={reference?.kind === 'bible' ? 'Bible verse' : 'Publication'}
-      title={reference?.text}
+      label={reference?.kind === 'bible' ? 'Scripture' : 'Publication'}
+      title={displayTitle}
       loading={loading}
+      loadingLabel={t('loading_reference')}
+      previewTokens={preview?.tokens}
+      onReference={onReference}
     >
-      {error ? (
-        <SizableText color="#EF8080">{error}</SizableText>
-      ) : preview ? (
-        <YStack gap="$3">
-          {preview.title && preview.title !== reference?.text ? (
-            <SizableText size="$4" color="#D1D5DB" fontWeight="800">{preview.title}</SizableText>
-          ) : null}
-          {preview.tokens?.length ? (
-            <ReferencePreviewTokens tokens={preview.tokens} onReference={onReference} />
-          ) : (
-            <SizableText size="$4" color="#F2F2F7" lineHeight={28}>{preview.content}</SizableText>
-          )}
-        </YStack>
+      {error ? <SizableText color={colors.danger}>{error}</SizableText> : null}
+      {!preview?.tokens?.length && preview?.content ? (
+        <SizableText color={colors.text} fontSize={17} lineHeight={28}>
+          {preview.content}
+        </SizableText>
       ) : null}
     </PreviewModal>
-  );
-}
-
-function ReferencePreviewTokens({
-  tokens,
-  onReference,
-}: {
-  tokens: WolReferenceToken[];
-  onReference: (ref: WolReference) => void;
-}) {
-  return (
-    <XStack flexWrap="wrap" gap="$1" alignItems="baseline">
-      {tokens.map((token, index) => {
-        if (!token.href || token.kind === 'text' || token.kind === 'image' || token.kind === 'video') {
-          return (
-            <SizableText key={index} size="$4" color="#F2F2F7" lineHeight={26}>
-              {token.text}
-            </SizableText>
-          );
-        }
-        const refKind = token.kind as WolReference['kind'];
-        return (
-          <SizableText
-            key={index}
-            size="$4"
-            color={refKind === 'bible' || refKind === 'crossref' ? '#78B58A' : '#8DB4E2'}
-            lineHeight={26}
-            textDecorationLine="underline"
-            onPress={() => onReference({ text: token.text, href: token.href ?? '', kind: refKind })}
-          >
-            {token.text}
-          </SizableText>
-        );
-      })}
-    </XStack>
   );
 }
 

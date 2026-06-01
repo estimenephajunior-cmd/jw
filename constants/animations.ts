@@ -253,10 +253,11 @@ export const keyboardAnimation = {
  * Common animation values
  */
 export const animationValues = {
-  // Scale values
-  scalePressed: 0.95,
-  scaleHovered: 1.05,
-  scaleExpanded: 1.1,
+  // Scale values — premium interaction spec
+  scalePressed: 0.98,
+  scaleCardHover: 1.02,
+  scaleHovered: 1.02,
+  scaleExpanded: 1.04,
 
   // Opacity values
   opacityHidden: 0,

@@ -11,6 +11,8 @@
     "start:ios": "set EXPO_NO_TELEMETRY=1&& npx expo start --ios",
     "start:android": "set EXPO_NO_TELEMETRY=1&& npx expo start --android",
     "build:web": "set EXPO_NO_TELEMETRY=1&& npx expo export --platform web",
+    "build:web:same-origin": "set EXPO_NO_TELEMETRY=1&& set EXPO_PUBLIC_MCP_GATEWAY_URL=&& npx expo export --platform web",
+    "start:online": "node tools/mcp-gateway-server.js",
     "build:ios": "set EXPO_NO_TELEMETRY=1&& eas build --platform ios",
     "build:android": "set EXPO_NO_TELEMETRY=1&& eas build --platform android",
     "eject": "set EXPO_NO_TELEMETRY=1&& npx expo eject",
@@ -24,7 +26,9 @@
     "prebuild": "set EXPO_NO_TELEMETRY=1&& npx expo prebuild",
     "prebuild:clean": "set EXPO_NO_TELEMETRY=1&& npx expo prebuild --clean",
     "version:patch": "node tools/bump-version.js",
-    "scan:weekly": "node tools/weekly-bug-scanner.js"
+    "scan:weekly": "node tools/weekly-bug-scanner.js",
+    "setup:mcp-runtimes": "node tools/install-mcp-runtimes.js",
+    "start:mcp-gateway": "node tools/mcp-gateway-server.js"
   },
   "dependencies": {
     "@blinkdotnew/mobile-ui": "2.0.0",
@@ -67,6 +71,11 @@
     "react-native-worklets": "0.5.1",
     "tamagui": "1.144.4",
     "zustand": "^5.0.2"
+  },
+  "optionalDependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^2.6.7",
+    "body-parser": "^1.20.2"
   },
   "overrides": {
     "@tamagui/config": "1.144.4",

@@ -28,6 +28,8 @@ import {
   Separator,
 } from '@blinkdotnew/mobile-ui';
 import { usePremiumTheme } from '@/hooks/usePremiumTheme';
+import { GradientButton } from '@/components/premium';
+import { LinearGradient } from 'expo-linear-gradient';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -87,15 +89,16 @@ const MARITAL_STATUSES = ['Single', 'Married', 'Widowed'];
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 function StepDots({ current, total }: { current: number; total: number }) {
+  const t = usePremiumTheme();
   return (
     <XStack gap="$2" justifyContent="center" marginTop="$3">
       {Array.from({ length: total }).map((_, i) => (
         <YStack
           key={i}
-          width={i === current ? 24 : 8}
+          width={i === current ? 26 : 8}
           height={8}
           borderRadius="$10"
-          backgroundColor={i === current ? '#5B7E6B' : '#3A3A3C'}
+          backgroundColor={i === current ? t.primary : t.border}
         />
       ))}
     </XStack>
@@ -114,20 +117,21 @@ function PickerRow({
   onSelect: (v: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const t = usePremiumTheme();
 
   return (
     <YStack gap="$2">
-      <SizableText size="$3" color="#9CA3AF" fontWeight="600" letterSpacing={0.5}>
+      <SizableText size="$3" color={t.textMuted} fontWeight="600" letterSpacing={0.5}>
         {label.toUpperCase()}
       </SizableText>
       <TouchableOpacity
         activeOpacity={0.75}
         onPress={() => setOpen((p) => !p)}
         style={{
-          backgroundColor: '#2C2C2E',
-          borderRadius: 12,
+          backgroundColor: t.surface,
+          borderRadius: 14,
           borderWidth: 1,
-          borderColor: open ? '#5B7E6B' : '#3A3A3C',
+          borderColor: open ? t.primary : t.border,
           paddingHorizontal: 16,
           paddingVertical: 14,
           flexDirection: 'row',
@@ -135,20 +139,20 @@ function PickerRow({
           alignItems: 'center',
         }}
       >
-        <SizableText size="$4" color={value ? '#F2F2F7' : '#6B7280'}>
+        <SizableText size="$4" color={value ? t.text : t.textMuted}>
           {value || `Select ${label}`}
         </SizableText>
-        <SizableText size="$3" color="#5B7E6B">
+        <SizableText size="$3" color={t.primary}>
           {open ? '▲' : '▼'}
         </SizableText>
       </TouchableOpacity>
 
       {open && (
         <Card
-          backgroundColor="#2C2C2E"
-          borderRadius="$4"
+          backgroundColor={t.surface}
+          borderRadius="$6"
           borderWidth={1}
-          borderColor="#3A3A3C"
+          borderColor={t.border}
           overflow="hidden"
         >
           {options.map((opt, idx) => (
@@ -161,11 +165,11 @@ function PickerRow({
               }}
               style={{
                 paddingHorizontal: 16,
-                paddingVertical: 13,
+                paddingVertical: 14,
                 backgroundColor:
-                  opt === value ? 'rgba(91,126,107,0.18)' : 'transparent',
+                  opt === value ? `${t.primaryDeep}18` : 'transparent',
                 borderBottomWidth: idx < options.length - 1 ? 1 : 0,
-                borderBottomColor: '#3A3A3C',
+                borderBottomColor: t.border,
                 flexDirection: 'row',
                 alignItems: 'center',
                 justifyContent: 'space-between',
@@ -173,12 +177,12 @@ function PickerRow({
             >
               <SizableText
                 size="$4"
-                color={opt === value ? '#5B7E6B' : '#E5E7EB'}
+                color={opt === value ? t.primary : t.text}
               >
                 {opt}
               </SizableText>
               {opt === value && (
-                <SizableText size="$4" color="#5B7E6B">
+                <SizableText size="$4" color={t.primary}>
                   ✓
                 </SizableText>
               )}
@@ -192,10 +196,11 @@ function PickerRow({
 
 // ─── Step 0: Ask for Name ────────────────────────────────────────────────
 function NameStep({ name, setName, onNext, t }: { name: string; setName: (n: string) => void; onNext: () => void; t: ReturnType<typeof createTranslator> }) {
+  const theme = usePremiumTheme();
   return (
     <YStack flex={1} justifyContent="center" alignItems="center" gap="$5" padding="$6">
-      <H1 color="#5B7E6B">{t('welcome')}</H1>
-      <SizableText size="$4" color="#9CA3AF" textAlign="center">
+      <H1 color={theme.gold}>{t('welcome')}</H1>
+      <SizableText size="$4" color={theme.textMuted} textAlign="center">
         {t('what_is_your_name')}
       </SizableText>
       <Input
@@ -206,11 +211,14 @@ function NameStep({ name, setName, onNext, t }: { name: string; setName: (n: str
         size="$4"
         width={240}
         maxLength={32}
+        backgroundColor={theme.surface2}
+        color={theme.text}
+        borderColor={theme.border}
       />
       <Button
-        backgroundColor="#5B7E6B"
-        color="#fff"
-        borderRadius={10}
+        backgroundColor={theme.primary}
+        color={theme.bg}
+        borderRadius={12}
         size="$4"
         disabled={!name.trim()}
         onPress={onNext}
@@ -868,6 +876,42 @@ function CompleteStep({
   );
 }
 
+// ─── Feature intro steps ─────────────────────────────────────────────────────
+
+function FeatureIntroStep({
+  title,
+  description,
+  glyph,
+  onNext,
+  nextLabel,
+}: {
+  title: string;
+  description: string;
+  glyph: string;
+  onNext: () => void;
+  nextLabel: string;
+}) {
+  const theme = usePremiumTheme();
+  return (
+    <YStack flex={1} justifyContent="center" paddingHorizontal="$6" gap="$6">
+      <YStack borderRadius={24} overflow="hidden" width="100%">
+        <LinearGradient colors={[...theme.heroGradient]} style={{ padding: 28 }}>
+          <SizableText fontSize={48}>{glyph}</SizableText>
+        </LinearGradient>
+      </YStack>
+      <YStack gap="$3">
+        <H1 color={theme.text} fontWeight="700">
+          {title}
+        </H1>
+        <Paragraph color={theme.textMuted} size="$4" lineHeight={26}>
+          {description}
+        </Paragraph>
+      </YStack>
+      <GradientButton onPress={onNext}>{nextLabel}</GradientButton>
+    </YStack>
+  );
+}
+
 // ─── Main Onboarding Screen ───────────────────────────────────────────────────
 
 export default function OnboardingScreen() {
@@ -887,7 +931,7 @@ export default function OnboardingScreen() {
   });
   const t = createTranslator(selectedLanguage?.symbol || 'en');
 
-  const TOTAL_STEPS = 5;
+  const TOTAL_STEPS = 8;
 
   const updateProfile = (updates: Partial<SpiritualProfile>) => {
     setProfile((prev) => ({ ...prev, ...updates }));
@@ -932,26 +976,64 @@ export default function OnboardingScreen() {
       case 0:
         return <NameStep name={name} setName={setName} onNext={() => setStep(1)} t={t} />;
       case 1:
-        return <WelcomeStep onNext={() => setStep(2)} t={t} />;
+        return (
+          <FeatureIntroStep
+            title={t('onboarding_discover_title')}
+            description={t('onboarding_discover_desc')}
+            glyph="📖"
+            onNext={() => setStep(2)}
+            nextLabel={t('continue')}
+          />
+        );
       case 2:
         return (
-          <LanguageStep
+          <FeatureIntroStep
+            title={t('onboarding_study_title')}
+            description={t('onboarding_study_desc')}
+            glyph="✦"
             onNext={() => setStep(3)}
+            nextLabel={t('continue')}
+          />
+        );
+      case 3:
+        return (
+          <FeatureIntroStep
+            title={t('onboarding_research_title')}
+            description={t('onboarding_research_desc')}
+            glyph="◇"
+            onNext={() => setStep(4)}
+            nextLabel={t('continue')}
+          />
+        );
+      case 4:
+        return (
+          <FeatureIntroStep
+            title={t('onboarding_organize_title')}
+            description={t('onboarding_organize_desc')}
+            glyph="◎"
+            onNext={() => setStep(5)}
+            nextLabel={t('continue')}
+          />
+        );
+      case 5:
+        return (
+          <LanguageStep
+            onNext={() => setStep(6)}
             selectedLanguage={selectedLanguage}
             onSelectLanguage={setSelectedLanguage}
             t={t}
           />
         );
-      case 3:
+      case 6:
         return (
           <ProfileStep
-            onNext={() => setStep(4)}
+            onNext={() => setStep(7)}
             profile={profile}
             onUpdateProfile={updateProfile}
             t={t}
           />
         );
-      case 4:
+      case 7:
         return (
           <CompleteStep
             onStart={handleComplete}
@@ -966,7 +1048,7 @@ export default function OnboardingScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-      {/* Header with back button + dots */}
+      <LinearGradient colors={[...colors.heroGradient]} style={{ position: 'absolute', inset: 0, opacity: 0.35 }} />
       <YStack paddingHorizontal="$6" paddingTop="$2" paddingBottom="$1">
         <XStack alignItems="center" justifyContent="space-between">
           {step > 0 ? (
@@ -976,12 +1058,14 @@ export default function OnboardingScreen() {
                 width: 40,
                 height: 40,
                 borderRadius: 20,
-                backgroundColor: '#2C2C2E',
+                backgroundColor: colors.surface,
+                borderWidth: 1,
+                borderColor: colors.border,
                 justifyContent: 'center',
                 alignItems: 'center',
               }}
             >
-              <SizableText size="$4" color="#9CA3AF">
+              <SizableText size="$4" color={colors.textMuted}>
                 ←
               </SizableText>
             </TouchableOpacity>
@@ -991,21 +1075,21 @@ export default function OnboardingScreen() {
 
           <StepDots current={step} total={TOTAL_STEPS} />
 
-          {/* Step counter */}
           <YStack
-            backgroundColor="#2C2C2E"
+            backgroundColor={colors.surface}
             borderRadius="$10"
             paddingHorizontal="$3"
             paddingVertical="$1"
+            borderWidth={1}
+            borderColor={colors.border}
           >
-            <SizableText size="$2" color="#9CA3AF" fontWeight="600">
-              {step + 1}/{TOTAL_STEPS}
+            <SizableText size="$2" color={colors.textMuted} fontWeight="600">
+              {t('step_of_total', { step: String(step + 1), total: String(TOTAL_STEPS) })}
             </SizableText>
           </YStack>
         </XStack>
       </YStack>
 
-      {/* Step content */}
       <YStack flex={1}>{renderStep()}</YStack>
     </SafeAreaView>
   );

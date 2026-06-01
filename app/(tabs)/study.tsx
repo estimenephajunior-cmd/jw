@@ -24,8 +24,12 @@ import {
 } from '@blinkdotnew/mobile-ui';
 import { useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { generateAiText } from '@/services/localAiService';
+import { generateStudyPlanWeekTopics } from '@/services/aiRetrievalService';
+import { normalizeAppLanguage } from '@/services/sourceGatewayService';
+import { useAppStore } from '@/store/appStore';
 import { usePremiumTheme } from '@/hooks/usePremiumTheme';
+import { translate } from '@/services/i18nService';
+import { AppScreen, AppHeader, PremiumCard } from '@/components/premium';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -203,6 +207,8 @@ function CreatePlanSheet({
   const [topicsText, setTopicsText] = useState('');
   const [useAI, setUseAI] = useState(false);
   const [creating, setCreating] = useState(false);
+  const rawContentLanguage = useAppStore((s) => s.contentLanguage || s.language);
+  const contentLanguage = normalizeAppLanguage(rawContentLanguage);
 
   const reset = () => {
     setTitle('');
@@ -225,25 +231,15 @@ function CreatePlanSheet({
       let weekTopics: string[] = [];
 
       if (useAI) {
-        // Load user profile for context
         const profileRaw = await AsyncStorage.getItem('user_profile');
         const profile = profileRaw ? JSON.parse(profileRaw) : {};
-        const lang = await AsyncStorage.getItem('selected_language');
-
-        const result = await generateAiText({
-          system: `You are a JW Study Assistant creating a personalized study plan based on official Jehovah's Witness publications and JW.org materials. Only use topics from official JW sources. Respond ONLY with a JSON array of ${totalWeeks} strings, each being a study topic.`,
-          messages: [{
-            role: 'user',
-            content: `Create ${totalWeeks} study topics for a ${planType} study plan titled "${title.trim()}". User language: ${lang ?? 'English'}. User profile: ${JSON.stringify(profile)}. Make topics progressively build understanding using JW.org materials, starting with foundational truths.`,
-          }],
-        });
-
-        try {
-          const jsonMatch = result.text?.match(/\[[\s\S]*\]/);
-          if (jsonMatch) {
-            weekTopics = JSON.parse(jsonMatch[0]);
-          }
-        } catch {}
+        weekTopics = await generateStudyPlanWeekTopics(
+          title.trim(),
+          planType,
+          totalWeeks,
+          JSON.stringify(profile),
+          contentLanguage.symbol,
+        );
       }
 
       // Fall back to manual topics or placeholders
@@ -466,6 +462,8 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 export default function StudyScreen() {
   const router = useRouter();
   const colors = usePremiumTheme();
+  const appLanguage = useAppStore((s) => s.appLanguage);
+  const displaySymbol = appLanguage?.symbol || 'en';
   const [plans, setPlans] = useState<StudyPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -486,30 +484,26 @@ export default function StudyScreen() {
   }, [loadPlans]));
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-      {/* Header */}
-      <XStack
-        paddingHorizontal="$5"
-        paddingTop="$3"
-        paddingBottom="$2"
-        justifyContent="space-between"
-        alignItems="center"
-      >
-        <H2 color={colors.text} fontWeight="900" style={{ fontSize: 30 }}>
-          Study Plan
-        </H2>
-        <Button
-          size="$3"
-          backgroundColor="#5B7E6B"
-          color="#FFFFFF"
-          borderRadius="$3"
-          onPress={() => setShowCreate(true)}
-          pressStyle={{ opacity: 0.8 }}
-          icon={<Plus size={14} color="#FFFFFF" />}
-        >
-          New Plan
-        </Button>
-      </XStack>
+    <AppScreen scroll={false} padded={false}>
+      <YStack paddingHorizontal="$5" paddingTop="$2" width="100%">
+        <AppHeader
+          title={translate(displaySymbol, 'personal_study_workspace')}
+          subtitle={translate(displaySymbol, 'study_plan')}
+          right={
+            <Button
+              size="$3"
+              backgroundColor={colors.primary}
+              color="#FFFFFF"
+              borderRadius="$6"
+              onPress={() => setShowCreate(true)}
+              pressStyle={{ opacity: 0.8 }}
+              icon={<Plus size={14} color="#FFFFFF" />}
+            >
+              +
+            </Button>
+          }
+        />
+      </YStack>
 
       {loading ? (
         <YStack flex={1} justifyContent="center" alignItems="center">
@@ -571,6 +565,6 @@ export default function StudyScreen() {
           router.push(`/study-plan-detail?planId=${plan.id}` as any);
         }}
       />
-    </SafeAreaView>
+    </AppScreen>
   );
 }

@@ -517,18 +517,6 @@ function PartCard({ part, onPress, displaySymbol }: { part: MeetingPart; onPress
           <SizableText size="$4" color="#5B7E6B">›</SizableText>
         </YStack>
       </XStack>
-      <XStack paddingTop="$2" gap="$2">
-        <Button
-          size="$2"
-          backgroundColor={colors.glow}
-          color={colors.primary}
-          borderRadius="$3"
-          onPress={onPress}
-          fontSize={11}
-        >
-          {translate(displaySymbol, 'prepare')}
-        </Button>
-      </XStack>
     </Card>
   );
 }
@@ -716,24 +704,15 @@ export default function MeetingsScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
       <YStack flex={1}>
-        {/* ── Header ── */}
-        <XStack
-          paddingHorizontal="$5"
-          paddingTop="$4"
-          paddingBottom="$3"
-          alignItems="center"
-          gap="$2"
-        >
-          <BookOpen size={22} color={colors.primary} />
-          <H2 color={colors.text} fontWeight="900" fontSize={28}>
-            {translate(displaySymbol, 'meeting_preparation')}
+        <YStack paddingHorizontal="$5" paddingTop="$2" paddingBottom="$2" gap="$2">
+          <H2 color={colors.text} fontWeight="800" fontSize={22} lineHeight={28}>
+            {translate(displaySymbol, 'meetings')}
           </H2>
-        </XStack>
+        </YStack>
 
-        {/* ── Week Selector ── */}
         <XStack
           paddingHorizontal="$5"
-          paddingBottom="$3"
+          paddingBottom="$2"
           alignItems="center"
           justifyContent="space-between"
         >

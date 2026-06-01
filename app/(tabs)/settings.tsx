@@ -500,7 +500,11 @@ export default function SettingsScreen() {
                   <Sun size={18} color="#F59E0B" />
                   <SizableText size="$4" color={colors.text} fontWeight="800" flex={1}>{t('theme')}</SizableText>
                 </XStack>
-                <ThemeToggle value={theme} onChange={handleTheme} />
+                <ThemeToggle
+                  value={theme}
+                  onChange={handleTheme}
+                  labels={{ dark: t('dark'), light: t('light'), system: t('system') }}
+                />
               </YStack>
             </SettingsCard>
           </YStack>
