@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node tools/dev.js",
     "proxy": "node tools/local-proxy.js",
+    "test:ai": "node scripts/test-ai-providers.mjs",
     "start": "set EXPO_NO_TELEMETRY=1&& npx expo start",
     "start:web": "set EXPO_NO_TELEMETRY=1&& npx expo start --web",
     "start:ios": "set EXPO_NO_TELEMETRY=1&& npx expo start --ios",
@@ -73,9 +74,9 @@
     "zustand": "^5.0.2"
   },
   "optionalDependencies": {
+    "body-parser": "^1.20.2",
     "express": "^4.18.2",
-    "node-fetch": "^2.6.7",
-    "body-parser": "^1.20.2"
+    "node-fetch": "^2.6.7"
   },
   "overrides": {
     "@tamagui/config": "1.144.4",

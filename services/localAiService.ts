@@ -15,12 +15,20 @@ export interface GenerateAiTextResult {
   provider: AiProvider;
 }
 
-export type AiProvider = 'openai' | 'gemini';
+export type AiProvider = 'gemini' | 'openai' | 'groq' | 'openrouter';
 
-const OPENAI_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY?.trim();
 const GEMINI_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY?.trim();
+const OPENAI_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY?.trim();
+const GROQ_KEY = (
+  process.env.EXPO_PUBLIC_GROQ_API_KEY || process.env.EXPO_PUBLIC_GROK_API_KEY
+)?.trim();
+const OPENROUTER_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY?.trim();
+
+const GEMINI_MODEL = process.env.EXPO_PUBLIC_GEMINI_MODEL || 'gemini-2.5-flash';
 const OPENAI_MODEL = process.env.EXPO_PUBLIC_OPENAI_MODEL || 'gpt-4o-mini';
-const GEMINI_MODEL = process.env.EXPO_PUBLIC_GEMINI_MODEL || 'gemini-2.0-flash';
+const GROQ_MODEL = process.env.EXPO_PUBLIC_GROQ_MODEL || 'openai/gpt-oss-20b';
+const OPENROUTER_MODEL =
+  process.env.EXPO_PUBLIC_OPENROUTER_MODEL || 'google/gemini-2.5-flash';
 
 function buildMessages(input: GenerateAiTextInput): AiMessage[] {
   if (input.messages?.length) {
@@ -37,33 +45,47 @@ function buildMessages(input: GenerateAiTextInput): AiMessage[] {
   ];
 }
 
-async function generateWithOpenAI(input: GenerateAiTextInput): Promise<GenerateAiTextResult> {
-  if (!OPENAI_KEY) throw new Error('OpenAI API key not configured');
-
+async function generateWithChatCompletions(
+  input: GenerateAiTextInput,
+  opts: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    provider: AiProvider;
+    extraHeaders?: Record<string, string>;
+    label: string;
+  }
+): Promise<GenerateAiTextResult> {
   const messages = buildMessages(input);
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const url = `${opts.baseUrl.replace(/\/$/, '')}/chat/completions`;
+
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${OPENAI_KEY}`,
+      Authorization: `Bearer ${opts.apiKey}`,
+      ...opts.extraHeaders,
     },
     body: JSON.stringify({
-      model: input.model || OPENAI_MODEL,
+      model: input.model || opts.model,
       messages,
       temperature: 0.35,
+      max_tokens: 4096,
     }),
     signal: AbortSignal.timeout(120000),
   });
 
   if (!response.ok) {
     const err = await response.text().catch(() => '');
-    throw new Error(`OpenAI request failed (${response.status})${err ? `: ${err.slice(0, 200)}` : ''}`);
+    throw new Error(
+      `${opts.label} failed (${response.status})${err ? `: ${err.slice(0, 200)}` : ''}`
+    );
   }
 
   const data = await response.json();
   const text = String(data?.choices?.[0]?.message?.content ?? '').trim();
-  if (!text) throw new Error('OpenAI returned an empty response.');
-  return { text, provider: 'openai' };
+  if (!text) throw new Error(`${opts.label} returned an empty response.`);
+  return { text, provider: opts.provider };
 }
 
 async function generateWithGemini(input: GenerateAiTextInput): Promise<GenerateAiTextResult> {
@@ -90,7 +112,7 @@ async function generateWithGemini(input: GenerateAiTextInput): Promise<GenerateA
           ? { parts: [{ text: systemParts.join('\n\n') }] }
           : undefined,
         contents,
-        generationConfig: { temperature: 0.35 },
+        generationConfig: { temperature: 0.35, maxOutputTokens: 8192 },
       }),
       signal: AbortSignal.timeout(120000),
     }
@@ -98,7 +120,7 @@ async function generateWithGemini(input: GenerateAiTextInput): Promise<GenerateA
 
   if (!response.ok) {
     const err = await response.text().catch(() => '');
-    throw new Error(`Gemini request failed (${response.status})${err ? `: ${err.slice(0, 200)}` : ''}`);
+    throw new Error(`Gemini failed (${response.status})${err ? `: ${err.slice(0, 200)}` : ''}`);
   }
 
   const data = await response.json();
@@ -110,32 +132,67 @@ async function generateWithGemini(input: GenerateAiTextInput): Promise<GenerateA
 }
 
 /**
- * Generate text using OpenAI (preferred) or Google Gemini.
- * Set EXPO_PUBLIC_OPENAI_API_KEY and/or EXPO_PUBLIC_GEMINI_API_KEY.
+ * Generate text using API keys (tries in order until one succeeds):
+ * Gemini (AI Studio) → OpenAI → Groq → OpenRouter
  */
 export async function generateAiText(input: GenerateAiTextInput): Promise<GenerateAiTextResult> {
   const errors: string[] = [];
 
-  if (OPENAI_KEY) {
-    try {
-      return await generateWithOpenAI(input);
-    } catch (e) {
-      errors.push(e instanceof Error ? e.message : String(e));
-    }
-  }
+  const providers: Array<() => Promise<GenerateAiTextResult>> = [];
 
   if (GEMINI_KEY) {
+    providers.push(() => generateWithGemini(input));
+  }
+  if (OPENAI_KEY) {
+    providers.push(() =>
+      generateWithChatCompletions(input, {
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: OPENAI_KEY,
+        model: OPENAI_MODEL,
+        provider: 'openai',
+        label: 'OpenAI',
+      })
+    );
+  }
+  if (GROQ_KEY) {
+    providers.push(() =>
+      generateWithChatCompletions(input, {
+        baseUrl: 'https://api.groq.com/openai/v1',
+        apiKey: GROQ_KEY,
+        model: GROQ_MODEL,
+        provider: 'groq',
+        label: 'Groq',
+      })
+    );
+  }
+  if (OPENROUTER_KEY) {
+    providers.push(() =>
+      generateWithChatCompletions(input, {
+        baseUrl: 'https://openrouter.ai/api/v1',
+        apiKey: OPENROUTER_KEY,
+        model: OPENROUTER_MODEL,
+        provider: 'openrouter',
+        label: 'OpenRouter',
+        extraHeaders: {
+          'HTTP-Referer': 'https://jw-study-assistant.local',
+          'X-Title': 'JW Study Assistant',
+        },
+      })
+    );
+  }
+
+  if (!providers.length) {
+    throw new Error(
+      'AI is not configured. Set one or more: EXPO_PUBLIC_GEMINI_API_KEY, EXPO_PUBLIC_OPENAI_API_KEY, EXPO_PUBLIC_GROQ_API_KEY, EXPO_PUBLIC_OPENROUTER_API_KEY'
+    );
+  }
+
+  for (const run of providers) {
     try {
-      return await generateWithGemini(input);
+      return await run();
     } catch (e) {
       errors.push(e instanceof Error ? e.message : String(e));
     }
-  }
-
-  if (!OPENAI_KEY && !GEMINI_KEY) {
-    throw new Error(
-      'AI is not configured. Add EXPO_PUBLIC_OPENAI_API_KEY or EXPO_PUBLIC_GEMINI_API_KEY to your environment.'
-    );
   }
 
   throw new Error(errors.join(' | ') || 'AI generation failed.');
